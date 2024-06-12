@@ -36,7 +36,7 @@ fi
 
 readonly packageName='adblock-fast'
 readonly PKG_VERSION='dev-test'
-readonly packageCompat='1'
+readonly packageCompat='2'
 readonly serviceName="$packageName $PKG_VERSION"
 readonly packageConfigFile="/etc/config/${packageName}"
 readonly dnsmasqAddnhostsFile="/var/run/${packageName}/dnsmasq.addnhosts"
