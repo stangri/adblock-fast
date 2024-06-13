@@ -16,7 +16,7 @@ define Package/adblock-fast
   SECTION:=net
   CATEGORY:=Network
   TITLE:=AdBlock Fast Service
-  URL:=https://docs.openwrt.melmac.net/adblock-fast/
+  URL:=https://github.com/stangri/adblock-fast/
   DEPENDS:=+jshn +curl
 	DEPENDS+=+!BUSYBOX_DEFAULT_AWK:gawk
 	DEPENDS+=+!BUSYBOX_DEFAULT_GREP:grep
