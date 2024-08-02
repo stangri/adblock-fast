@@ -1670,6 +1670,13 @@ adb_check_lists() {
 }
 
 adb_config_update() {
+	_cleanup_missing_urls() {
+		local cfg="$1" url size
+		config_get url "$cfg" url
+		if [ -z "$url" ]; then
+			uci_delete "$packageName" "$cfg"
+		fi
+	}
 	local R_TMP label
 	local param validation_result="$3"
 	case "$1" in
@@ -1705,6 +1712,9 @@ adb_config_update() {
 		fi
 	fi
 	rm -f "$R_TMP"
+	config_load "$packageName"
+	config_foreach _cleanup_missing_urls 'file_url'
+	[ -n "$(uci_changes "$packageName")" ] && uci_commit "$packageName"
 	return 0
 }
 
@@ -1732,7 +1742,7 @@ adb_sizes() {
 	load_environment "$validation_result" 'quiet' || return 1
 	config_load "$packageName"
 	config_foreach _config_add_url_size 'file_url'
-	uci_commit "$packageName"
+	[ -n "$(uci_changes "$packageName")" ] && uci_commit "$packageName"
 }
 
 # shellcheck disable=SC2120
