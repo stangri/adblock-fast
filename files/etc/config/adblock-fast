@@ -36,8 +36,14 @@ config adblock-fast 'config'
 	option verbosity '2'
 
 config file_url
+	option url 'https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/domains/pro.txt'
+	option size '12522070'
+	option action 'block'
+	option enabled '0'
+
+config file_url
 	option url 'https://cdn.jsdelivr.net/gh/StevenBlack/hosts/hosts'
-	option size '6770929'
+	option size '4790642'
 	option action 'block'
 	option enabled '0'
 
