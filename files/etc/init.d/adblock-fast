@@ -1113,7 +1113,8 @@ process_file_url() {
 
 	label="${url##*//}"
 	label="${label%%/*}"
-	label="File: $label"
+	label="${name:-$label}"
+	label="List: $label"
 	case "$action" in
 		allow) type='Allowed'; D_TMP="$A_TMP"
 		;;
@@ -1726,10 +1727,11 @@ adb_show_blocklist() {
 
 adb_sizes() {
 	_config_add_url_size() {
-		local cfg="$1" url size
+		local cfg="$1" url name size
 		config_get url "$cfg" url
+		config_get name "$cfg" name
 		size="$(get_url_filesize "$url")"
-		output "$url${size:+: $size} "
+		output "${name:-$url}${size:+: $size} "
 		if [ -n "$size" ]; then
 			uci_set "$packageName" "$cfg" 'size' "$size"
 			output_okn
@@ -2117,6 +2119,7 @@ load_validate_file_url_section() {
 		'enabled:bool:1' \
 		'action:or("allow", "block"):block' \
 		'size:or(uinteger, "")' \
+		'name:string' \
 		'url:string'
 }
 
