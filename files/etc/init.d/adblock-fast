@@ -364,6 +364,7 @@ is_running() {
 	fi
 }
 ipset() { "$ipset" "$@" >/dev/null 2>&1; }
+get_ram_available() { ubus call system info | jsonfilter -e '@.memory.available'; }
 get_ram_free() { ubus call system info | jsonfilter -e '@.memory.free'; }
 get_ram_total() { ubus call system info | jsonfilter -e '@.memory.total'; }
 led_on(){ if [ -n "${1}" ] && [ -e "${1}/trigger" ]; then echo 'default-on' > "${1}/trigger" 2>&1; fi; }
@@ -1182,7 +1183,7 @@ download_dnsmasq_file() {
 	json set status 'statusDownloading'
 
 	rm -f "$A_TMP" "$B_TMP" "$SED_TMP" "$outputFile" "$outputCache" "$outputGzip"
-	if [ "$(get_ram_free)" -lt 32 ]; then
+	if [ "$(get_ram_available)" -lt 32 ]; then
 		output 3 'Low free memory, restarting resolver '
 		if resolver 'quiet_restart'; then
 			output_okn
@@ -1223,7 +1224,7 @@ download_lists() {
 			[ -n "$size" ] && total_sizes=$((total_sizes+size))
 		}
 		local i free_mem total_sizes
-		free_mem="$(get_ram_free)"
+		free_mem="$(get_ram_available)"
 		if [ -z "$free_mem" ]; then
 			json add warnning 'warningFreeRamCheckFail'
 			output "${_WARNING_}: $(get_text 'warningFreeRamCheckFail')!\\n"
