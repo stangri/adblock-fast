@@ -1068,7 +1068,7 @@ cache() {
 		;;
 		create_gzip)
 			rm -f "$outputGzip" >/dev/null 2>/dev/null
-			R_TMP="$(mktemp -u -q -t ${packageName}_tmp.XXXXXXXX)"
+			R_TMP="$(mktemp -u -q -t "${packageName}_tmp.XXXXXXXX")"
 			if gzip < "$outputFile" > "$R_TMP"; then
 				if mv "$R_TMP" "$outputGzip"; then
 					rm -f "$R_TMP"
@@ -1131,7 +1131,7 @@ process_file_url() {
 		return 0
 	fi
 	while [ -z "$R_TMP" ] || [ -e "$R_TMP" ]; do
-		R_TMP="$(mktemp -u -q -t ${packageName}_tmp.XXXXXXXX)"
+		R_TMP="$(mktemp -u -q -t "${packageName}_tmp.XXXXXXXX")"
 	done
 	if [ -z "$url" ] || ! $dl_command "$url" "$dl_flag" "$R_TMP" 2>/dev/null || \
 		[ ! -s "$R_TMP" ]; then
@@ -1142,7 +1142,7 @@ process_file_url() {
 		append_newline "$R_TMP"
 		[ -n "$cfg" ] && new_size="$(get_local_filesize "$R_TMP")"
 		if [ -n "$new_size" ] && [ "$size" != "$new_size" ]; then
-			uci_set "$packageName" "$cfg" 'size' "$size"
+			uci_set "$packageName" "$cfg" 'size' "$new_size"
 		fi
 		format="$(detect_file_type "$R_TMP")"
 		case "$format" in
@@ -1212,6 +1212,7 @@ download_dnsmasq_file() {
 }
 
 download_lists() {
+# shellcheck disable=SC2317
 	_ram_check() {
 		_config_calculate_sizes() {
 			local cfg="$1"
@@ -1624,6 +1625,7 @@ adb_check() {
 }
 
 adb_check_lists() {
+# shellcheck disable=SC2317
 	_check_list() {
 		local cfg="$1"
 		local en size url R_TMP string c
@@ -1636,7 +1638,7 @@ adb_check_lists() {
 			output "[DL] $url $__FAIL__\\n"
 		fi
 		while [ -z "$R_TMP" ] || [ -e "$R_TMP" ]; do
-			R_TMP="$(mktemp -u -q -t ${packageName}_tmp.XXXXXXXX)"
+			R_TMP="$(mktemp -u -q -t "${packageName}_tmp.XXXXXXXX")"
 		done
 		if [ -z "$url" ] || ! $dl_command "$url" "$dl_flag" "$R_TMP" 2>/dev/null || \
 			[ ! -s "$R_TMP" ]; then
@@ -1672,6 +1674,7 @@ adb_check_lists() {
 }
 
 adb_config_update() {
+# shellcheck disable=SC2317
 	_cleanup_missing_urls() {
 		local cfg="$1" url size
 		config_get url "$cfg" url
@@ -1696,7 +1699,7 @@ adb_config_update() {
 	fi
 	output 1 'Updating config '
 	while [ -z "$R_TMP" ] || [ -e "$R_TMP" ]; do
-		R_TMP="$(mktemp -u -q -t ${packageName}_tmp.XXXXXXXX)"
+		R_TMP="$(mktemp -u -q -t "${packageName}_tmp.XXXXXXXX")"
 	done
 	if ! $dl_command "$config_update_url" "$dl_flag" "$R_TMP" 2>/dev/null || [ ! -s "$R_TMP" ]; then
 		append_newline "$R_TMP"
@@ -1727,6 +1730,7 @@ adb_show_blocklist() {
 }
 
 adb_sizes() {
+# shellcheck disable=SC2317
 	_config_add_url_size() {
 		local cfg="$1" url name size
 		config_get url "$cfg" url
