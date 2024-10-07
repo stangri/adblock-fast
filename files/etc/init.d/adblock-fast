@@ -340,13 +340,7 @@ is_fw4_restart_needed() {
 		return 1
 	fi
 }
-is_integer() {
-	case "$1" in
-		(*[!0123456789]*) return 1;;
-		('')              return 1;;
-		(*)               return 0;;
-	esac
-}
+is_integer() { case "$1" in ''|*[!0-9]*) return 1;; esac; }
 is_greater() { test "$(printf '%s\n' "$@" | sort -V | head -n 1)" != "$1"; }
 is_greater_or_equal() { test "$(printf '%s\n' "$@" | sort -V | head -n 1)" = "$2"; }
 # shellcheck disable=SC3057
@@ -466,13 +460,7 @@ get_url_filesize() {
 
 output() {
 # Target verbosity level with the first parameter being an integer
-	is_integer() {
-		case "$1" in
-			(*[!0123456789]*) return 1;;
-			('')              return 1;;
-			(*)               return 0;;
-		esac
-	}
+	is_integer() { case "$1" in ''|*[!0-9]*) return 1;; esac; }
 	local msg memmsg logmsg text
 	local sharedMemoryOutput="/dev/shm/$packageName-output"
 	if [ -z "$verbosity" ] && [ -n "$packageName" ]; then
