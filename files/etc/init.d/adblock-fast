@@ -233,10 +233,10 @@ config_cache() {
 	esac
 }
 count_blocked_domains() {
-	if [ -z "$outputBlockedCountFilter" ]; then
-		wc -l < "$outputFile"
-	else
+	if [ -n "$outputBlockedCountFilter" ]; then
 		sed "$outputBlockedCountFilter" "$outputFile" | wc -l
+	else
+		wc -l < "$outputFile"
 	fi
 }
 debug() { local __i __j; for __i in "$@"; do eval "__j=\$$__i"; echo "${__i}: ${__j} "; done; }
@@ -1347,8 +1347,8 @@ $(sed '/^[[:space:]]*$/d' "$A_TMP")"
 		;;
 	esac
 
-	if [ -z "$outputAllowFilter" ] && [ -n "$allowed_domain" ]; then
-		output 2 'Allowing domains '
+	if [ -n "$allowed_domain" ]; then
+		output 2 'Removing allowed domains from combined list'
 		json set message "$(get_text 'statusProcessing'): allowing domains"
 		for hf in ${allowed_domain}; do
 			hf="$(echo "$hf" | sed 's/\./\\./g')"
@@ -1367,8 +1367,8 @@ $(sed '/^[[:space:]]*$/d' "$A_TMP")"
 		fi
 	fi
 
-	output 2 'Formatting merged file '
-	json set message "$(get_text 'statusProcessing'): formatting merged file"
+	output 2 'Formatting combined list file '
+	json set message "$(get_text 'statusProcessing'): formatting combined list file"
 	if [ -z "$outputFilterIPv6" ]; then
 		if sed "$outputFilter" "$B_TMP" > "$A_TMP"; then
 			output_ok
@@ -1505,15 +1505,14 @@ adb_allow() {
 			output 2 "Allowing domain(s) \n"
 			for c in $string; do
 				output 2 "  $c "
-				if [ -z "$outputAllowFilter" ]; then
-					hf="$(echo "$c" | sed 's/\./\\./g')"
-					if sed -i "\:\(/\|\.\)${hf}/:d" "$outputFile" && \
-						uci_add_list_if_new "${packageName}" 'config' 'allowed_domain' "$c"; then
-							output_ok
-					else
-						output_fail
-					fi
+				hf="$(echo "$c" | sed 's/\./\\./g')"
+				if sed -i "\:\(/\|\.\)${hf}/:d" "$outputFile" && \
+					uci_add_list_if_new "${packageName}" 'config' 'allowed_domain' "$c"; then
+						output_ok
 				else
+					output_fail
+				fi
+				if [ -n "$outputAllowFilter" ]; then
 					if echo "$c" | sed -E "$outputAllowFilter" >> "$outputFile" && \
 						uci_add_list_if_new "${packageName}" 'config' 'allowed_domain' "$c"; then
 							output_ok
