@@ -12,7 +12,6 @@ LC_ALL=C
 
 if type extra_command 1>/dev/null 2>&1; then
 	extra_command 'allow' 'Allows domain in current block-list and config'
-	extra_command 'benchmark' 'Display processing executuion time for benchmarking'
 	extra_command 'check' 'Checks if specified domain is found in current block-list'
 	extra_command 'check_lists' 'Checks if specified domain is found in enabled block-lists'
 	extra_command 'dl' 'Force-downloads all enabled block-list'
