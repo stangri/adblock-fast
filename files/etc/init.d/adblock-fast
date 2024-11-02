@@ -465,9 +465,9 @@ get_url_filesize() {
 
 # shellcheck disable=SC3060
 output() {
-	local v="${verbosity:-1}"
+	[ -z "$verbosity" ] && verbosity="$(uci_get "$packageName" 'config' 'verbosity' '1')"
 	[ "$#" -ne '1' ] && {
-		case "$1" in [0-9]) [ $((v & $1)) -gt 0 ] && shift || return 0;; esac }
+		case "$1" in [0-9]) [ $((verbosity & $1)) -gt 0 ] && shift || return 0;; esac }
 	local msg="$*" queue="/dev/shm/$packageName-output"
 	[ -t 1 ] && printf "%b" "$msg"
 	[ "$msg" != "${msg//\\n}" ] && {
