@@ -1171,6 +1171,16 @@ process_file_url_wrapper() {
 }
 
 process_file_url() {
+	_sanitize_source() {
+		local type="$1" file="$2"
+		case "$type" in
+			hosts)
+				sed -i '/# Title: StevenBlack/,/# Start StevenBlack/d' "$file"
+#				sed -i -E '/^(.*)[\t ](local|localhost|localhost.localdomain)$/d;/^255.255.255.255[\t ]broadcasthost$/d;/^0.0.0.0[\t ]0.0.0.0$/d' "$file"
+#				sed -i -E '/^(.*)[\t ](ip6-localhost|ip6-loopback|ip6-localnet|ip6-mcastprefix|ip6-allnodes|ip6-allrouters|ip6-allhosts)/d' "$file"
+			;;
+		esac
+	}
 	local cfg="$1" new_size
 	local label type D_TMP R_TMP filter
 	if [ -z "$cfg" ] || [ -n "${2}${3}" ]; then
@@ -1220,7 +1230,10 @@ process_file_url() {
 			dnsmasq2) filter="$dnsmasq2FileFilter";;
 			dnsmasq3) filter="$dnsmasq3FileFilter";;
 			domains) filter="$domainsFilter";;
-			hosts) filter="$hostsFilter";;
+			hosts)
+				filter="$hostsFilter"
+				_sanitize_source 'hosts' "$R_TMP"
+			;;
 			*)
 				output 1 "$_FAIL_"
 				output 2 "[DL] $type $label $__FAIL__\n"
