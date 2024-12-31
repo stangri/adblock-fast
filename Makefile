@@ -6,7 +6,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=adblock-fast
 PKG_VERSION:=1.1.2
-PKG_RELEASE:=18
+PKG_RELEASE:=20
 PKG_MAINTAINER:=Stan Grishin <stangri@melmac.ca>
 PKG_LICENSE:=AGPL-3.0-or-later
 
@@ -54,25 +54,25 @@ define Package/adblock-fast/install
 endef
 
 define Package/adblock-fast/postinst
-	#!/bin/sh
-	# check if we are on real system
-	if [ -z "$${IPKG_INSTROOT}" ]; then
-		/etc/init.d/adblock-fast enable
-	fi
-	exit 0
+#!/bin/sh
+# check if we are on real system
+if [ -z "$${IPKG_INSTROOT}" ]; then
+	/etc/init.d/adblock-fast enable
+fi
+exit 0
 endef
 
 define Package/adblock-fast/prerm
-	#!/bin/sh
-	# check if we are on real system
-	if [ -z "$${IPKG_INSTROOT}" ]; then
-		echo -n "Stopping adblock-fast service... "
-		{ /etc/init.d/adblock-fast stop && \
-		  /etc/init.d/adblock-fast killcache; } >/dev/null 2>&1 && echo "OK" || echo "FAIL"
-		echo -n "Removing rc.d symlink for adblock-fast... "
-		/etc/init.d/adblock-fast disable >/dev/null 2>&1 && echo "OK" || echo "FAIL"
-	fi
-	exit 0
+#!/bin/sh
+# check if we are on real system
+if [ -z "$${IPKG_INSTROOT}" ]; then
+	echo -n "Stopping adblock-fast service... "
+	{ /etc/init.d/adblock-fast stop && \
+	  /etc/init.d/adblock-fast killcache; } >/dev/null 2>&1 && echo "OK" || echo "FAIL"
+	echo -n "Removing rc.d symlink for adblock-fast... "
+	/etc/init.d/adblock-fast disable >/dev/null 2>&1 && echo "OK" || echo "FAIL"
+fi
+exit 0
 endef
 
 $(eval $(call BuildPackage,adblock-fast))
