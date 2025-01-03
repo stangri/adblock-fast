@@ -1,5 +1,5 @@
 #!/bin/sh /etc/rc.common
-# Copyright 2023 MOSSDeF, Stan Grishin (stangri@melmac.ca)
+# Copyright 2023-2025 MOSSDeF, Stan Grishin (stangri@melmac.ca)
 # shellcheck disable=SC3043
 
 # shellcheck disable=SC2034
@@ -1214,7 +1214,7 @@ process_file_url() {
 		local type="$1" file="$2"
 		case "$type" in
 			hosts)
-				sed -i '/# Title: StevenBlack/,/# Start StevenBlack/d' "$file"
+				sed -i '/# Title: StevenBlack/,/# Custom host records are listed here/d' "$file"
 #				sed -i -E '/^(.*)[\t ](local|localhost|localhost.localdomain)$/d;/^255.255.255.255[\t ]broadcasthost$/d;/^0.0.0.0[\t ]0.0.0.0$/d' "$file"
 #				sed -i -E '/^(.*)[\t ](ip6-localhost|ip6-loopback|ip6-localnet|ip6-mcastprefix|ip6-allnodes|ip6-allrouters|ip6-allhosts)/d' "$file"
 			;;
