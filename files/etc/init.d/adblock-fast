@@ -124,6 +124,7 @@ load_environment_flag=
 allowed_url=
 blocked_url=
 fw4_restart_flag=
+adbf_boot_flag=
 
 # shellcheck disable=SC1091
 . /lib/functions.sh
