@@ -2258,7 +2258,7 @@ adb_pause() {
 
 allow() { load_validate_config 'config' adb_allow "'$*'"; }
 boot() {
-	ubus -t 30 wait_for network.interface 2>/dev/null
+#	ubus -t 30 wait_for network.interface 2>/dev/null
 	adbf_boot_flag=1
 	rc_procd start_service 'on_boot' && service_started 'on_boot'
 }
