@@ -638,7 +638,7 @@ detect_file_type() {
 		echo 'dnsmasq2'
 	elif grep -q '^address=' "$file"; then
 		echo 'dnsmasq3'
-	elif grep -q '^0\.0\.0\.0' "$file" || grep -q '^127\.0\.0\.1' "$file"; then
+	elif grep -q -e '^0\.0\.0\.0\s' -e '^127\.0\.0\.1\s' "$file"; then
 		echo 'hosts'
 	elif [ -n "$(sed "$domainsFilter" "$file" | head -1)" ]; then
 		echo 'domains'
