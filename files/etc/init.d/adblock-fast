@@ -1428,7 +1428,7 @@ download_lists() {
 	local allowed_domains_from_dl
 	allowed_domains_from_dl="$(sed '/^[[:space:]]*$/d' "$A_TMP")"
 	allowed_domain="${allowed_domain}${allowed_domains_from_dl:+
-	$allowed_domains_from_dl}"
+$allowed_domains_from_dl}"
 
 	output 1 'Processing downloads '
 	output 2 'Sorting combined list '
