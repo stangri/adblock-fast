@@ -1420,13 +1420,15 @@ download_lists() {
 
 	append_newline "$B_TMP"
 	for hf in $blocked_domain $canaryDomains; do
-		printf "%s\n" "$(echo "$hf" | sed "$domainsFilter")" >> "$B_TMP"
+		[ -n "$hf" ] && printf "%s\n" "$(echo "$hf" | sed "$domainsFilter")" >> "$B_TMP"
 	done
 	sed -i '/^[[:space:]]*$/d' "$B_TMP"
 	[ ! -s "$B_TMP" ] && return 1
 
-	allowed_domain="${allowed_domain}
-$(sed '/^[[:space:]]*$/d' "$A_TMP")"
+	local allowed_domains_from_dl
+	allowed_domains_from_dl="$(sed '/^[[:space:]]*$/d' "$A_TMP")"
+	allowed_domain="${allowed_domain}${allowed_domains_from_dl:+
+	$allowed_domains_from_dl}"
 
 	output 1 'Processing downloads '
 	output 2 'Sorting combined list '
@@ -1493,7 +1495,7 @@ $(sed '/^[[:space:]]*$/d' "$A_TMP")"
 	esac
 
 	if [ -n "$allowed_domain" ]; then
-		output 2 'Removing allowed domains from combined list'
+		output 2 'Removing allowed domains from combined list '
 		json set message "$(get_text 'statusProcessing'): allowing domains"
 		for hf in ${allowed_domain}; do
 			hf="$(echo "$hf" | sed 's/\./\\./g')"
