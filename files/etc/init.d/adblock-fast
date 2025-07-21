@@ -1,6 +1,6 @@
 #!/bin/sh /etc/rc.common
 # Copyright 2023-2025 MOSSDeF, Stan Grishin (stangri@melmac.ca)
-# shellcheck disable=SC3043
+# shellcheck disable=SC2015,SC3043
 
 # shellcheck disable=SC2034
 START=94
@@ -24,7 +24,7 @@ fi
 
 readonly packageName='adblock-fast'
 readonly PKG_VERSION='dev-test'
-readonly packageCompat='4'
+readonly packageCompat='5'
 readonly serviceName="$packageName $PKG_VERSION"
 readonly packageMemoryThreshold='33554432'
 readonly packageConfigFile="/etc/config/${packageName}"
@@ -386,6 +386,7 @@ output_failn() { output 1 "$_FAIL_\n"; output 2 "$__FAIL__\n"; }
 print_json_bool() { json_init; json_add_boolean "$1" "$2"; json_dump; json_cleanup; }
 print_json_int() { json_init; json_add_int "$1" "$2"; json_dump; json_cleanup; }
 print_json_string() { json_init; json_add_string "$1" "$2"; json_dump; json_cleanup; }
+sanitize_domain() { printf '%s' "$1" | sed -E 's#^[a-z]+://##; s#/.*$##; s/:.*$//'; }
 sanitize_dir() { [ -d "$(readlink -fn "$1")" ] && readlink -fn "$1"; }
 smartdns_restart() { /etc/init.d/smartdns restart >/dev/null 2>&1; }
 str_contains() { test "$1" != "$(str_replace "$1" "$2" '')"; }
@@ -561,6 +562,7 @@ get_text() {
 		errorDeletingDataFile) r="failed to delete data file %s";;
 		errorRestoringBackupFile) r="failed to restore backup file %s";;
 		errorNoOutputFile) r="failed to create final block-list %s";;
+		errorNoHeartbeat) r="Heartbeat domain is not accessible after resolver restart";;
 
 		statusNoInstall) r="$serviceName is not installed or not found";;
 		statusStopped) r="Stopped";;
@@ -691,6 +693,9 @@ load_environment() {
 	fi
 
 # TODO: check for resolver and error out on start
+	[ "$heartbeat_domain" = '-' ] && unset heartbeat_domain
+	heartbeat_domain="$(sanitize_domain "$heartbeat_domain")"
+	[ "$update_config_sizes" = '0' ] && unset update_config_sizes
 
 	if [ -n "$dnsmasq_config_file_url" ]; then
 		case "$dns" in
@@ -971,7 +976,8 @@ resolver() {
 		str_contains_word "$force_dns_port" "$instance_port" || force_dns_port="${force_dns_port:+$force_dns_port }${instance_port}"
 	}
 	
-	local param output_text i
+	local i resolver_name="${dns%%.*}"
+	[ -z "$1" ] && return 0
 	case $1 in
 		cleanup)
 			rm -f "$dnsmasqAddnhostsFile" "$dnsmasqAddnhostsCache" "${compressed_cache_dir}/${dnsmasqAddnhostsGzip}"
@@ -1010,6 +1016,10 @@ resolver() {
 				;;
 			esac
 		;;
+		on_stop|quiet|quiet_restart)
+			eval "${resolver_name}_restart"
+			return $?
+		;;
 		on_start)
 			if [ ! -s "$outputFile" ]; then
 				json set status 'statusFail'
@@ -1017,29 +1027,102 @@ resolver() {
 				output "${_ERROR_}: $(get_text 'errorOutputFileCreate' "$outputFile")!\n"
 				return 1
 			fi
-			config_load 'dhcp'
-			if [ "$dnsmasq_instance" = "*" ]; then
-				config_foreach _dnsmasq_instance_config 'dnsmasq' "$dns"
-				config_foreach _dnsmasq_instance_append_force_dns_port 'dnsmasq'
-			elif [ -n "$dnsmasq_instance" ]; then
-				for i in $dnsmasq_instance; do
-					_dnsmasq_instance_config "@dnsmasq[$i]" "$dns" || _dnsmasq_instance_config "$i" "$dns"
-					_dnsmasq_instance_append_force_dns_port "@dnsmasq[$i]" || _dnsmasq_instance_append_force_dns_port "$i"
-				done
-			fi
-			config_load 'smartdns'
-			if [ "$smartdns_instance" = "*" ]; then
-				config_foreach _smartdns_instance_config 'smartdns' "$dns"
-				config_foreach _smartdns_instance_append_force_dns_port 'smartdns'
-			elif [ -n "$smartdns_instance" ]; then
-				for i in $smartdns_instance; do
-					_smartdns_instance_config "@smartdns[$i]" "$dns" || _smartdns_instance_config "$i" "$dns"
-					_smartdns_instance_append_force_dns_port "@smartdns[$i]" || _smartdns_instance_append_force_dns_port "$i"
-				done
-			fi
-
+			output 1 "Cycling $resolver_name "
+			resolver 'update_config' && \
+			resolver 'test' && \
+			resolver 'restart' && \
+			resolver 'heartbeat' || resolver 'revert'
+		;;
+		test)
 			case "$dns" in
 				dnsmasq.*)
+					output 2 "Testing dnsmasq configuration "
+					if dnsmasq --test >/dev/null 2>/dev/null; then
+						output_ok
+						return 0
+					else
+						output_fail
+						return 1
+					fi
+				;;
+				smartdns.*)
+					return 0
+				;;
+				unbound.*)
+					return 0
+				;;
+			esac
+		;;
+		restart)
+			output 2 "Restarting $resolver_name "
+			json set message "Restarting $resolver_name"
+			if eval "${resolver_name}_restart"; then
+				json set status 'statusSuccess'
+				led_on "$led"
+				output_ok
+				return 0
+			else 
+				output_fail
+				json set status 'statusFail'
+				json add error 'errorDNSReload'
+				output "${_ERROR_}: $(get_text 'errorDNSReload')!\n"
+				return 1
+			fi
+		;;
+		heartbeat)
+			[ -n "$heartbeat_domain" ] || return 0
+			is_integer "$heartbeat_sleep_timeout" || return 0
+			output 2 "Probing $heartbeat_domain for $heartbeat_sleep_timeout seconds "
+			json set message "Testing resolver on $heartbeat_domain"
+			local i=0
+			while [ "$i" -lt "$heartbeat_sleep_timeout" ]; do
+				if nslookup "$heartbeat_domain" >/dev/null 2>&1; then
+					output_okn
+					return 0
+				fi
+				output '.'
+				i=$((i+1))
+				sleep 1
+			done
+			output_failn
+			json set status 'statusFail'
+			json add error 'errorNoHeartbeat'
+			output "${_ERROR_}: $(get_text 'errorNoHeartbeat')!\n"
+			return 1
+		;;
+		revert)
+			output 1 "Resetting/Restarting $resolver_name "
+			output 2 "Resetting $resolver_name "
+			resolver 'cleanup'
+			output_ok
+			output 2 "Restarting $resolver_name "
+			if eval "${resolver_name}_restart"; then
+				led_off "$led"
+				output_okn
+				return 0
+			else
+				output_failn
+				json set status 'statusFail'
+				json add error 'errorDNSReload'
+				output "${_ERROR_}: $(get_text 'errorDNSReload')!\n"
+				return 1
+			fi
+		;;
+		update_config)
+			output 2 "Updating $resolver_name configuration "
+			case "$dns" in
+				dnsmasq.*)
+					config_load 'dhcp'
+					if [ "$dnsmasq_instance" = "*" ]; then
+						config_foreach _dnsmasq_instance_config 'dnsmasq' "$dns"
+						config_foreach _dnsmasq_instance_append_force_dns_port 'dnsmasq'
+					elif [ -n "$dnsmasq_instance" ]; then
+						for i in $dnsmasq_instance; do
+							_dnsmasq_instance_config "@dnsmasq[$i]" "$dns" || _dnsmasq_instance_config "$i" "$dns"
+							_dnsmasq_instance_append_force_dns_port "@dnsmasq[$i]" || _dnsmasq_instance_append_force_dns_port "$i"
+						done
+					fi
+					[ -n "$(uci_changes dhcp)" ] && uci_commit 'dhcp'
 					if [ -n "$outputDnsmasqFileList" ]; then
 						local i
 						for i in $outputDnsmasqFileList; do
@@ -1055,89 +1138,28 @@ resolver() {
 						output "${_ERROR_}: $(get_text 'errorNoOutputFile' "$outputFile")!\n"
 						return 1
 					fi
-					param='dnsmasq_restart'
-					output_text='Restarting dnsmasq'
 				;;
 				smartdns.*)
+					config_load 'smartdns'
+					if [ "$smartdns_instance" = "*" ]; then
+						config_foreach _smartdns_instance_config 'smartdns' "$dns"
+						config_foreach _smartdns_instance_append_force_dns_port 'smartdns'
+					elif [ -n "$smartdns_instance" ]; then
+						for i in $smartdns_instance; do
+							_smartdns_instance_config "@smartdns[$i]" "$dns" || _smartdns_instance_config "$i" "$dns"
+							_smartdns_instance_append_force_dns_port "@smartdns[$i]" || _smartdns_instance_append_force_dns_port "$i"
+						done
+					fi
+					[ -n "$(uci_changes smartdns)" ] && uci_commit 'smartdns'
 					chmod 660 "$outputFile" "$outputConfig"
 					chown root:root "$outputFile" "$outputConfig" >/dev/null 2>/dev/null
-					param='smartdns_restart'
-					output_text='Restarting SmartDNS'
 				;;
 				unbound.*)
 					chmod 660 "$outputFile"
 					chown root:unbound "$outputFile" >/dev/null 2>/dev/null
-					param='unbound_restart'
-					output_text='Restarting Unbound'
 				;;
 			esac
-
-			if [ -n "$(uci_changes dhcp)" ]; then 
-				uci_commit 'dhcp'
-				if ! str_contains "$param" 'dnsmasq_restart'; then
-					param="${param:+"$param; dnsmasq_restart"}"
-					output_text="${output_text}/dnsmasq"
-				fi
-			fi
-			if [ -n "$(uci_changes smartdns)" ]; then 
-				uci_commit 'smartdns'
-				if ! str_contains "$param" 'smartdns_restart'; then
-					param="${param:+"$param; "}smartdns_restart"
-					output_text="${output_text}/smartDNS"
-				fi
-			fi
-			output 1 "$output_text "
-			output 2 "$output_text "
-			json set message "$output_text"
-			if eval "$param"; then
-				json set status 'statusSuccess'
-				led_on "$led"
-				output_okn
-			else 
-				output_fail
-				json set status 'statusFail'
-				json add error 'errorDNSReload'
-				output "${_ERROR_}: $(get_text 'errorDNSReload')!\n"
-				return 1
-			fi
-		;;
-		on_stop)
-			case "$dns" in
-				dnsmasq.*)
-					param='dnsmasq_restart'
-				;;
-				smartdns.*)
-					param='smartdns_restart'
-				;;
-				unbound.*)
-					param='unbound_restart'
-				;;
-			esac
-			if [ -n "$(uci_changes dhcp)" ]; then 
-				uci_commit 'dhcp'
-				str_contains "$param" 'dnsmasq_restart' || param="${param:+"$param; dnsmasq_restart"}"
-			fi
-			if [ -n "$(uci_changes smartdns)" ]; then 
-				uci_commit 'smartdns'
-				str_contains "$param" 'smartdns_restart' || param="${param:+"$param; "}smartdns_restart"
-			fi
-			eval "$param"
-			return $?
-		;;
-		quiet|quiet_restart)
-			case "$dns" in
-				dnsmasq.*)
-					param='dnsmasq_restart'
-				;;
-				smartdns.*)
-					param='smartdns_restart'
-				;;
-				unbound.*)
-					param='unbound_restart'
-				;;
-			esac
-			eval "$param"
-			return $?
+			output_ok
 		;;
 	esac
 }
@@ -1418,7 +1440,7 @@ download_lists() {
 	wait
 	if [ -n "$(uci_changes "$packageName")" ]; then 
 		output 2 "Saving updated file size(s) "
-		if uci_commit "$packageName"; then output_ok; else output_fail; fi
+		if [ -n "$update_config_sizes" ] && uci_commit "$packageName"; then output_ok; else output_fail; fi
 	fi
 	output 1 '\n'
 
@@ -1436,6 +1458,19 @@ download_lists() {
 		canaryDomains="${canaryDomains:+$canaryDomains }${canaryDomainsMozilla}"
 	fi
 
+	output 1 'Processing downloads '
+
+	output 2 'Assembling allowed domains list '
+	json set status 'statusProcessing'
+	json set message "$(get_text 'statusProcessing'): assembling allowed domains list"
+	local allowed_domains_from_dl
+	allowed_domains_from_dl="$(sed '/^[[:space:]]*$/d' "$A_TMP")"
+	allowed_domain="${allowed_domain}${allowed_domains_from_dl:+ $allowed_domains_from_dl}"
+	output_ok
+
+	output 2 'Sorting combined list '
+	json set status 'statusProcessing'
+	json set message "$(get_text 'statusProcessing'): sorting combined list"
 	append_newline "$B_TMP"
 	for hf in $blocked_domain $canaryDomains; do
 		[ -n "$hf" ] && printf "%s\n" "$(echo "$hf" | sed "$domainsFilter")" >> "$B_TMP"
@@ -1443,14 +1478,6 @@ download_lists() {
 	sed -i '/^[[:space:]]*$/d' "$B_TMP"
 	[ ! -s "$B_TMP" ] && return 1
 
-	local allowed_domains_from_dl
-	allowed_domains_from_dl="$(sed '/^[[:space:]]*$/d' "$A_TMP")"
-	allowed_domain="${allowed_domain}${allowed_domains_from_dl:+ $allowed_domains_from_dl}"
-
-	output 1 'Processing downloads '
-	output 2 'Sorting combined list '
-	json set status 'statusProcessing'
-	json set message "$(get_text 'statusProcessing'): sorting combined list"
 	if [ "$allow_non_ascii" -gt 0 ]; then
 		if sort -u "$B_TMP" > "$A_TMP"; then
 			output_ok
@@ -1972,7 +1999,7 @@ adb_sizes() {
 	load_environment "$validation_result" 'quiet' || return 1
 	config_load "$packageName"
 	config_foreach _config_add_url_size 'file_url'
-	[ -n "$(uci_changes "$packageName")" ] && uci_commit "$packageName"
+	[ -n "$(uci_changes "$packageName")" ] && [ -n "$update_config_sizes" ] && uci_commit "$packageName"
 }
 
 # shellcheck disable=SC2120
@@ -2036,6 +2063,7 @@ adb_start() {
 			output 3 'Found cache file, reusing it '
 			json set message 'found cache file, reusing it.'
 			if cache 'restore'; then 
+				unset heartbeat_domain
 				output_okn
 				resolver 'on_start'
 			else
@@ -2074,12 +2102,14 @@ adb_start() {
 		output 0 "Restarting $serviceName... "
 		output 3 "Restarting $serviceName...\n"
 		json set status 'statusRestarting'
+		unset heartbeat_domain
 		resolver 'on_start'
 	fi
 	if [ "$action" = 'start' ]; then
 		output 0 "Starting $serviceName... "
 		output 3 "Starting $serviceName...\n"
 		json set status 'statusStarting'
+		unset heartbeat_domain
 		resolver 'on_start'
 	fi
 	if [ -s "$outputFile" ] && [ "$(json get status)" != "statusFail" ]; then
@@ -2244,10 +2274,10 @@ adb_stop() {
 		output "Stopping $serviceName... "
 		cache 'create'
 		if resolver 'on_stop'; then
-			ipset -q -! flush adb
-			ipset -q -! destroy adb
-			nft delete set inet fw4 adb4
-			nft delete set inet fw4 adb6
+			ipset -q -! flush adb > /dev/null 2>&1
+			ipset -q -! destroy adb > /dev/null 2>&1
+			nft delete set inet fw4 adb4 > /dev/null 2>&1
+			nft delete set inet fw4 adb6 > /dev/null 2>&1
 			led_off "$led"
 			output 0 "$__OK__\n"; output_okn;
 			json set status 'statusStopped'
@@ -2312,7 +2342,6 @@ reload_service() { rc_procd start_service 'restart'; }
 restart_service() { rc_procd start_service 'restart'; }
 service_started() { is_fw4_restart_needed && procd_set_config_changed firewall; }
 service_stopped() { is_fw4_restart_needed && procd_set_config_changed firewall; }
-# shellcheck disable=SC2015
 service_triggers() {
 	local wan wan6 i
 	local procd_trigger_wan6
@@ -2383,6 +2412,10 @@ load_validate_config() {
 	local led
 	local dns
 	local dnsmasq_instance
+	local smartdns_instance
+	local heartbeat_domain
+	local heartbeat_sleep_timeout
+	local update_config_sizes
 	local allowed_domain
 	local blocked_domain
 	local dnsmasq_config_file_url
@@ -2413,6 +2446,9 @@ load_validate_config() {
 		'dns:or("dnsmasq.addnhosts", "dnsmasq.conf", "dnsmasq.ipset", "dnsmasq.nftset", "dnsmasq.servers", "smartdns.domainset", "smartdns.ipset", "smartdns.nftset", "unbound.adb_list"):dnsmasq.servers' \
 		'dnsmasq_instance:list(or(integer, string)):*' \
 		'smartdns_instance:list(or(integer, string)):*' \
+		'heartbeat_domain:or("-", string):heartbeat.melmac.ca' \
+		'heartbeat_sleep_timeout:range(1,60):10' \
+		'update_config_sizes:bool:1' \
 		'allowed_domain:list(string)' \
 		'blocked_domain:list(string)' \
 		'dnsmasq_config_file_url:string'
