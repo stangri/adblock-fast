@@ -695,7 +695,7 @@ load_environment() {
 # TODO: check for resolver and error out on start
 	[ "$heartbeat_domain" = '-' ] && unset heartbeat_domain
 	heartbeat_domain="$(sanitize_domain "$heartbeat_domain")"
-	[ "$update_config_sizes" = '0' ] && unset update_config_sizes
+	[ "$update_config_sizes" = '1' ] || unset update_config_sizes
 
 	if [ -n "$dnsmasq_config_file_url" ]; then
 		case "$dns" in
