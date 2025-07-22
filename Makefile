@@ -30,7 +30,7 @@ endef
 define Package/adblock-fast/description
 Fast AdBlocking script to block ad or abuse/malware domains with Dnsmasq, SmartDNS or Unbound.
 Script supports local/remote list of domains and hosts-files for both block-listing and allow-listing.
-Please see https://docs.openwrt.melmac.net/adblock-fast/ for more information.
+Please see https://docs.openwrt.melmac.ca/adblock-fast/ for more information.
 endef
 
 define Package/adblock-fast/conffiles
