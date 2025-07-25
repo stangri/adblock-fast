@@ -37,9 +37,18 @@ jobs:
 
       - name: Download OpenWrt SDK
         run: |
-          BASE_URL=https://downloads.openwrt.org/releases/${{ matrix.target }}/targets/x86/64/
-          SDK_URL=$(curl -s $BASE_URL | grep -o 'openwrt-sdk-.*\.tar\.xz' | head -n1)
-          wget $BASE_URL$SDK_URL -O sdk.tar.xz
+          if [[ "${{ matrix.target }}" == "snapshot" ]]; then
+            BASE_URL="https://downloads.openwrt.org/snapshots/targets/x86/64/"
+          else
+            BASE_URL="https://downloads.openwrt.org/releases/${{ matrix.target }}/targets/x86/64/"
+          fi
+          echo "Using SDK from: $BASE_URL"
+          SDK_URL=$(curl -s "$BASE_URL" | grep -o 'openwrt-sdk-.*\.tar\.xz' | head -n1)
+          if [ -z "$SDK_URL" ]; then
+            echo "::error::Could not find SDK archive at $BASE_URL"
+            exit 1
+          fi
+          wget "$BASE_URL$SDK_URL" -O sdk.tar.xz
           tar -xf sdk.tar.xz
           mv openwrt-sdk-* sdk
 
