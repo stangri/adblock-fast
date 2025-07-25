@@ -1,0 +1,107 @@
+name: Build OpenWrt Package
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ github.repository }} for ${{ matrix.target }} (${{ matrix.sdk_version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64
+        #          - aarch64_cortex-a53
+        #          - aarch64_generic
+        #          - arm_cortex-a7
+        #          - arm_cortex-a9
+        #          - mips_24kc
+        #          - mipsel_24kc
+        sdk_version:
+          - openwrt-24.10
+          - snapshots
+
+    steps:
+      - name: 🧾 Checkout repo
+        uses: actions/checkout@v4
+
+      - name: 🧰 Set up melmac feed structure
+        run: |
+          # Create the standard OpenWrt feeds directory structure
+          mkdir -p feed/ 
+          # Copy all files to create the feed structure
+          rsync -av --exclude='.git' --exclude='feed' ./ feed/
+
+      - name: 🏗️ Build with OpenWrt SDK
+        uses: openwrt/gh-action-sdk@v8
+        env:
+          ARCH: ${{ matrix.target }}
+          FEEDNAME: melmac
+          PACKAGES: adblock-fast
+          VERSION: ${{ matrix.sdk_version }}
+          INDEX: 1
+
+      - name: 🔍 Debug build output
+        run: |
+          echo "=== Build directory structure ==="
+          find . -name "*.ipk" -type f 2>/dev/null || echo "No .ipk files found"
+          echo "=== bin directory structure ==="
+          ls -la bin/ 2>/dev/null || echo "No bin directory found"
+          if [ -d "bin/packages" ]; then
+            echo "=== packages directory structure ==="
+            find bin/packages/ -type f -name "*.ipk" 2>/dev/null || echo "No .ipk files in packages directory"
+            echo "=== Full packages directory tree ==="
+            ls -laR bin/packages/ 2>/dev/null || echo "No packages directory"
+          fi
+
+      - name: 📦 Upload artifact for ${{ matrix.target }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: adblock-fast-${{ matrix.target }}-${{ matrix.sdk_version }}
+          path: |
+            bin/packages/*/melmac/adblock-fast*.ipk
+            bin/packages/*/melmac/adblock-fast*.apk
+            bin/packages/*/melmac/Packages*
+            bin/packages/*/*/*.ipk
+            bin/packages/*/*/*.apk
+          if-no-files-found: warn
+
+  release:
+    name: Release ${{ github.repository }}
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🧾 Checkout repo
+        uses: actions/checkout@v4
+
+      - name: 🔍 Extract version and release from Makefile
+        id: version
+        run: |
+          PKG_VERSION=$(grep -E '^PKG_VERSION *:?=' Makefile | head -n1 | cut -d= -f2 | tr -d '[:space:]')
+          PKG_RELEASE=$(grep -E '^PKG_RELEASE *:?=' Makefile | head -n1 | cut -d= -f2 | tr -d '[:space:]')
+          COMBINED_VERSION="${PKG_VERSION}-${PKG_RELEASE}"
+          echo "📦 Version: $COMBINED_VERSION"
+          echo "version=$COMBINED_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: ⬇️ Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./release-assets
+
+      - name: 🗃️ Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Build v${{ steps.version.outputs.version }}
+          files: |
+            ./release-assets/**/*.ipk
+            ./release-assets/**/*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
