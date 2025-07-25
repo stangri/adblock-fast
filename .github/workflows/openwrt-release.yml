@@ -13,6 +13,7 @@ jobs:
     name: Build for ${{ matrix.target }}
     runs-on: ubuntu-latest
     strategy:
+      max-parallel: 1
       matrix:
         target: ["24.10.2", "snapshot"]
 
@@ -37,6 +38,7 @@ jobs:
 
       - name: Download OpenWrt SDK
         run: |
+          set -e
           if [[ "${{ matrix.target }}" == "snapshot" ]]; then
             BASE_URL="https://downloads.openwrt.org/snapshots/targets/x86/64/"
           else
@@ -53,7 +55,8 @@ jobs:
           fi
 
           echo "Downloading SDK: $SDK_URL"
-          wget "${BASE_URL}${SDK_URL}" -O "sdk.tar.${SDK_URL##*.}"
+          wget --timeout=30 --tries=5 --waitretry=5 --progress=dot:giga \
+            "${BASE_URL}${SDK_URL}" -O "sdk.tar.${SDK_URL##*.}"
 
           if [[ "$SDK_URL" == *.zst ]]; then
             zstd -d sdk.tar.zst -o sdk.tar
