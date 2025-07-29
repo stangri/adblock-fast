@@ -1896,7 +1896,7 @@ adb_check_lists() {
 		else
 			append_newline "$R_TMP"
 			for string in ${param}; do
-				c="$(grep -c "$string" "$R_TMP")"
+				c="$(grep -c -E "$string" "$R_TMP")"
 				if [ "$c" -gt 0 ]; then
 					if [ "$c" -eq 1 ]; then
 						output "Found 1 match for '$string' in '$url'.\n"
