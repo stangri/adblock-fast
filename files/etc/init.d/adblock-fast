@@ -16,7 +16,7 @@ if type extra_command 1>/dev/null 2>&1; then
 	extra_command 'check_lists' 'Checks if specified domain is found in enabled block-lists'
 	extra_command 'dl' 'Force-downloads all enabled block-list'
 	extra_command 'killcache' 'Delete all cached files'
-	extra_command 'pause' 'Pauses AdBlocking for specified number of seconds (default: 60)'
+	extra_command 'pause' 'Pauses ad-blocking for specified number of seconds (default: 60)'
 	extra_command 'show_blocklist' 'List currently blocked domains'
 	extra_command 'sizes' 'Displays the file-sizes of configured block-lists'
 	extra_command 'version' 'Show version information'
@@ -2077,8 +2077,7 @@ adb_start() {
 	elif [ "$action" = 'restart' ] || [ "$param" = 'restart' ]; then
 		action='restart'
 	elif adb_file 'test' && [ "$status" = "statusSuccess" ] && [ -z "$error" ]; then
-		status_service 'on_info'
-		return 0
+		:
 	else
 		action='download'
 	fi
