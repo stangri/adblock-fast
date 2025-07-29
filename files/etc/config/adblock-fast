@@ -36,6 +36,7 @@ config adblock-fast 'config'
 	option verbosity '2'
 	option heartbeat_domain 'heartbeat.melmac.ca'
 	option heartbeat_sleep_timeout '10'
+	option sanity_check '1'
 	option update_config_sizes '1'
 
 config file_url
