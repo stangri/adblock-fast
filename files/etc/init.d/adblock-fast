@@ -199,9 +199,9 @@ adb_config_cache() {
 				local old_allowed_url old_blocked_url
 				if [ ! -s "$runningConfigFile" ]; then
 					ret='on_boot'
-				elif cmp -s "$uciConfigFile" "$runningConfigFile"; then
-					ret='restart'
-				else
+				elif ! cmp -s "$uciConfigFile" "$runningConfigFile"; then
+#					ret='restart'
+#				else
 					local current_allowed_url current_blocked_url
 					config_load "$uciConfigFile"
 					config_foreach append_url 'file_url' current_allowed_url current_blocked_url
