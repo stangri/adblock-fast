@@ -80,6 +80,7 @@ readonly unboundCache="/var/run/${packageName}/unbound.cache"
 readonly unboundGzip="${packageName}.unbound.gz"
 readonly unboundFilter='s|^|local-zone: "|;s|$|." always_nxdomain|'
 readonly unboundOutputFilter='s|^local-zone: "||;s|." always_nxdomain$||;'
+readonly ALLOWED_TMP="/var/${packageName}.allowed.tmp"
 readonly A_TMP="/var/${packageName}.a.tmp"
 readonly B_TMP="/var/${packageName}.b.tmp"
 readonly SED_TMP="/var/${packageName}.sed.tmp"
@@ -99,8 +100,10 @@ readonly _OK_='\033[0;32m\xe2\x9c\x93\033[0m'
 readonly __OK__='\033[0;32m[\xe2\x9c\x93]\033[0m'
 readonly _FAIL_='\033[0;31m\xe2\x9c\x97\033[0m'
 readonly __FAIL__='\033[0;31m[\xe2\x9c\x97]\033[0m'
-readonly _ERROR_='\033[0;31mERROR\033[0m'
-readonly _WARNING_='\033[0;33mWARNING\033[0m'
+readonly _WARN_='\033[0;33m\xe2\x9c\x94\033[0m'
+readonly __WARN__='\033[0;33m[\xe2\x9c\x94]\033[0m'
+readonly _ERROR_='\033[0;31mERROR:\033[0m'
+readonly _WARNING_='\033[0;33mWARNING:\033[0m'
 # shellcheck disable=SC2155
 readonly ipset="$(command -v ipset)"
 # shellcheck disable=SC2155
@@ -379,7 +382,7 @@ is_newline_ending() { [ "$(tail -c1 "$1" | wc -l)" -ne '0' ]; }
 is_present() { command -v "$1" >/dev/null 2>&1; }
 is_running() {
 	local i j
-	i="$(json 'get' 'status')"
+	i="$(json get 'status')"
 	j="$(ubus_get_data 'status')"
 	if [ "$i" = 'statusStopped' ] || [ -z "${i}${j}" ]; then
 		return 1
@@ -403,6 +406,7 @@ get_mem_total() {
 led_on(){ if [ -n "${1}" ] && [ -e "${1}/trigger" ]; then echo 'default-on' > "${1}/trigger" 2>&1; fi; }
 led_off(){ if [ -n "${1}" ] &&  [ -e "${1}/trigger" ]; then echo 'none' > "${1}/trigger" 2>&1; fi; }
 logger() { /usr/bin/logger -t "$packageName" "$@"; }
+logger_debug() { /usr/bin/logger -t "$packageName [$$]" "$@"; }
 nft() { "$nft" "$@" >/dev/null 2>&1; }
 output_dot() { output 1 "$_DOT_"; output 2 "$__DOT__"; }
 output_ok() { output 1 "$_OK_"; output 2 "$__OK__\n"; }
@@ -437,12 +441,12 @@ json() {
 	shift 3
 # shellcheck disable=SC2124
 	local extras="$@" line
-	local status message error stats
+	local status message error warning stats
 	local ret i
 	if [ -s "$runningStatusFile" ]; then
 		json_load_file "$runningStatusFile" 2>/dev/null
 		json_select 'data' 2>/dev/null
-		for i in status message error stats; do
+		for i in status message error warning stats; do
 			json_get_var "$i" "$i" 2>/dev/null
 		done
 	fi
@@ -458,7 +462,7 @@ json() {
 		del)
 			case "$param" in
 				all)
-					unset status message error stats;;
+					unset status message error warning stats;;
 				*)
 					unset "$param";;
 			esac
@@ -473,6 +477,7 @@ json() {
 	json_add_string status "$status"
 	json_add_string message "$message"
 	json_add_string error "$error"
+	json_add_string warning "$warning"
 	json_add_string stats "$stats"
 	json_close_object
 	mkdir -p "${runningStatusFile%/*}"
@@ -578,7 +583,7 @@ get_text() {
 		errorStopping) r="failed to stop $serviceName";;
 		errorDNSReload) r="failed to reload/restart DNS resolver";;
 		errorDownloadingConfigUpdate) r="failed to download Config Update file";;
-		errorDownloadingList) r="failed to download";;
+		errorDownloadingList) r="failed to download %s";;
 		errorParsingConfigUpdate) r="failed to parse Config Update file";;
 		errorParsingList) r="failed to parse";;
 		errorNoSSLSupport) r="no HTTPS/SSL support on device";;
@@ -1095,7 +1100,7 @@ resolver() {
 				output_ok
 			else
 				json add warning 'warningSanityCheckTLD' "$outputFile"
-				output_fail
+				output_warn
 			fi
 			output 2 "[DNS] Sanity check for $dns leading dots "
 			case "$dns" in
@@ -1104,7 +1109,7 @@ resolver() {
 						output_ok
 					else
 						json add warning 'warningSanityCheckLeadingDot' "$outputFile"
-						output_fail
+						output_warn
 					fi
 				;;
 				smartdns.*)
@@ -1112,7 +1117,7 @@ resolver() {
 						output_ok
 					else
 						json add warning 'warningSanityCheckLeadingDot' "$outputFile"
-						output_fail
+						output_warn
 					fi
 				;;
 				unbound.*)
@@ -1120,7 +1125,7 @@ resolver() {
 						output_ok
 					else
 						json add warning 'warningSanityCheckLeadingDot' "$outputFile"
-						output_fail
+						output_warn
 					fi
 				;;
 			esac
@@ -1336,7 +1341,7 @@ process_file_url() {
 	label="${name:-$label}"
 	label="List: $label"
 	case "$action" in
-		allow) type='Allowed'; D_TMP="$A_TMP"
+		allow) type='Allowed'; D_TMP="$ALLOWED_TMP"
 		;;
 		block) type='Blocked'; D_TMP="$B_TMP"
 		;;
@@ -1356,7 +1361,7 @@ process_file_url() {
 		[ ! -s "$R_TMP" ]; then
 		output 1 "$_FAIL_"
 		output 2 "[DL] $type $label $__FAIL__\n"
-		echo "errorDownloadingList|${url}" >> "$runningErrorFile"
+		echo "errorDownloadingList|${name:-$url}" >> "$runningErrorFile"
 	else
 		append_newline "$R_TMP"
 		[ -n "$cfg" ] && new_size="$(get_local_filesize "$R_TMP")"
@@ -1404,7 +1409,7 @@ download_dnsmasq_file() {
 	json set message "$(get_text 'statusDownloading')..."
 	json set status 'statusDownloading'
 
-	rm -f "$A_TMP" "$B_TMP" "$SED_TMP" "$outputFile" "$outputCache" "$outputGzip"
+	rm -f "$ALLOWED_TMP" "$A_TMP" "$B_TMP" "$SED_TMP" "$outputFile" "$outputCache" "$outputGzip"
 	if [ "$(get_mem_available)" -lt "$packageMemoryThreshold" ]; then
 		output 'Low free memory, restarting resolver '
 		if resolver 'quiet_restart'; then
@@ -1413,7 +1418,7 @@ download_dnsmasq_file() {
 			output_failn
 		fi
 	fi
-	touch "$A_TMP" "$B_TMP" "$SED_TMP"
+	touch "$ALLOWED_TMP" "$A_TMP" "$B_TMP" "$SED_TMP"
 	output 1 'Downloading dnsmasq file '
 	rm -f "$runningErrorFile"
 	process_file_url '' "$dnsmasq_config_file_url" 'file'
@@ -1477,13 +1482,14 @@ download_lists() {
 		fi
 	}
 	local hf j=0 R_TMP
+	local step_title start_time end_time elapsed
 
 	_ram_check || return 1
 
 	json set message "$(get_text 'statusDownloading')..."
 	json set status 'statusDownloading'
 
-	rm -f "$A_TMP" "$B_TMP" "$SED_TMP" "$outputFile" "$outputCache" "$outputGzip"
+	rm -f "$ALLOWED_TMP" "$A_TMP" "$B_TMP" "$SED_TMP" "$outputFile" "$outputCache" "$outputGzip"
 	if [ "$(get_mem_total)" -lt "$packageMemoryThreshold" ]; then
 		output 'Low free memory, restarting resolver '
 		if resolver 'quiet_restart'; then
@@ -1492,7 +1498,7 @@ download_lists() {
 			output_failn
 		fi
 	fi
-	touch "$A_TMP" "$B_TMP" "$SED_TMP"
+	touch "$ALLOWED_TMP" "$A_TMP" "$B_TMP" "$SED_TMP"
 	output 1 'Downloading lists '
 	rm -f "$runningErrorFile"
 	config_load "$packageName"
@@ -1520,21 +1526,17 @@ download_lists() {
 
 	output 1 'Processing downloads '
 
-	output 2 '[PROC] Creating combined allow-list '
+	start_time=$(date +%s)
+	step_title='Sorting combined block-list'
+	output 2 "[PROC] $step_title "
 	json set status 'statusProcessing'
-	json set message "$(get_text 'statusProcessing'): creating combined allow-list"
-	local allowed_domains_from_dl
-	allowed_domains_from_dl="$(sed '/^[[:space:]]*$/d' "$A_TMP")"
-	allowed_domain="${allowed_domain}${allowed_domains_from_dl:+ $allowed_domains_from_dl}"
-	output_ok
-
-	output 2 '[PROC] Sorting combined block-list '
-	json set status 'statusProcessing'
-	json set message "$(get_text 'statusProcessing'): sorting combined block-list"
+	json set message "$(get_text 'statusProcessing'): $step_title"
 	append_newline "$B_TMP"
-	for hf in $blocked_domain $canaryDomains; do
-		[ -n "$hf" ] && printf "%s\n" "$(echo "$hf" | sed "$domainsFilter")" >> "$B_TMP"
-	done
+	{
+		for hf in $blocked_domain $canaryDomains; do
+			[ -n "$hf" ] && echo "$hf"
+		done
+	} | sed "$domainsFilter" >> "$B_TMP"
 	sed -i '/^[[:space:]]*$/d' "$B_TMP"
 	[ ! -s "$B_TMP" ] && return 1
 
@@ -1553,78 +1555,104 @@ download_lists() {
 			json add error 'errorSorting'
 		fi
 	fi
+	end_time=$(date +%s)
+	elapsed=$(( end_time - start_time ))
+	logger_debug "[PROC-DEBUG] ${step_title} took ${elapsed}s"
 
 	case "$dns" in
 		'dnsmasq.conf' | 'dnsmasq.ipset' | 'dnsmasq.nftset' | 'dnsmasq.servers' | \
 		'smartdns.domainset' | 'smartdns.ipset' | 'smartdns.nftset' | \
 		'unbound.adb_list' )
-			# TLD optimization written by Dirk Brenken (dev@brenken.org)
-			output 2 '[PROC] Optimizing combined block-list '
-			json set message "$(get_text 'statusProcessing'): optimizing combined block-list"
-	# 	sed -E 'G;:t;s/(.*)(\.)(.*)(\n)(.*)/\1\4\5\2\3/;tt;s/(.*)\n(\.)(.*)/\3\2\1/' is actually slower than command below
-	# shellcheck disable=SC2016
-			if $awk -F "." '{for(f=NF;f>1;f--)printf "%s.",$f;print $1}' "$A_TMP" > "$B_TMP"; then
+			start_time=$(date +%s)
+			step_title='Optimizing combined block-list'
+			output 2 "[PROC] ${step_title} "
+			json set message "$(get_text 'statusProcessing'): ${step_title}"
+# shellcheck disable=SC2016
+			if $awk -F "." '{for(i=NF;i>0;i--) printf "%s%s", $i, (i>1?".":"\n")}' "$A_TMP" > "$B_TMP"; then
 				if sort "$B_TMP" > "$A_TMP"; then
-					if $awk '{ if (NR == 1) { tld = $NF; } else { if ($NF !~ tld "\\.") { results[++count] = tld; print tld; tld = $NF; } } } END { results[++count] = tld; for (i = 1; i <= count; i++) {print results[i];} }' "$A_TMP" > "$B_TMP"; then
-						if $awk -F "." '{for(f=NF;f>1;f--)printf "%s.",$f;print $1}' "$B_TMP" > "$A_TMP"; then
+					if $awk '
+						NR==1 {prev=$0; print; next}
+						{
+							len=length(prev)
+							if(substr($0,1,len)==prev && substr($0,len+1,1)==".") next
+							print
+							prev=$0
+						}
+					' "$A_TMP" > "$B_TMP"; then
+						if $awk -F "." '{for(i=NF;i>0;i--) printf "%s%s", $i, (i>1?".":"\n")}' "$B_TMP" > "$A_TMP"; then
 							if sort -u "$A_TMP" > "$B_TMP"; then
 								output_ok
 							else
-								output_failn
+								output_fail
 								json add error 'errorOptimization'
 								mv "$A_TMP" "$B_TMP"
 							fi
 						else
-							output_failn
+							output_fail
 							json add error 'errorOptimization'
 						fi
 					else
-						output_failn
+						output_fail
 						json add error 'errorOptimization'
 						mv "$A_TMP" "$B_TMP"
 					fi
 				else
-					output_failn
+					output_fail
 					json add error 'errorOptimization'
 				fi
 			else
-				output_failn
+				output_fail
 				json add error 'errorOptimization'
 				mv "$A_TMP" "$B_TMP"
 			fi
+			end_time=$(date +%s)
+			elapsed=$(( end_time - start_time ))
+			logger_debug "[PROC-DEBUG] ${step_title} took ${elapsed}s"
 		;;
 		*)
 			mv "$A_TMP" "$B_TMP"
 		;;
 	esac
 
-	if [ -n "$allowed_domain" ]; then
-		output 2 '[PROC] Removing allowed domains from combined block-list '
-		json set message "$(get_text 'statusProcessing'): removing allowed domains"
+	if [ -n "$allowed_domain" ] || [ -s "$ALLOWED_TMP" ]; then
+		start_time=$(date +%s)
+		step_title='Removing allowed domains from combined block-list'
+		output 2 "[PROC] ${step_title} "
+		json set message "$(get_text 'statusProcessing'): ${step_title}"
+		local allowed_domains_from_dl
+		[ -s "$ALLOWED_TMP" ] && allowed_domains_from_dl="$(sed '/^[[:space:]]*$/d' "$ALLOWED_TMP")"
+		allowed_domain="${allowed_domain}${allowed_domains_from_dl:+ $allowed_domains_from_dl}"
 		for hf in ${allowed_domain}; do
 			hf="$(echo "$hf" | sed 's/\./\\./g')"
-			echo "/(^|\.)${hf}$/d;" >> "$SED_TMP"
-		done
+			echo "/(^|\.)${hf}$/d;"
+		done > "$SED_TMP"
+		# if only doing exact matches, may be faster to add $hf to $ALLOWED_TMP and then
+		# grep -vFf "$ALLOWED_TMP" "$B_TMP" > "$A_TMP" && mv "$A_TMP" "$B_TMP"
 		if [ -s "$SED_TMP" ]; then
-			if sed -i -E -f "$SED_TMP" "$B_TMP"; then
+			if sed -E -f "$SED_TMP" "$B_TMP" > "$A_TMP" && mv "$A_TMP" "$B_TMP"; then
 				output_ok
 			else
-				output_failn
+				output_fail
 				json add error 'errorAllowListProcessing'
 			fi
 		else
-			output_failn
+			output_fail
 			json add error 'errorAllowListProcessing'
 		fi
+		end_time=$(date +%s)
+		elapsed=$(( end_time - start_time ))
+		logger_debug "[PROC-DEBUG] ${step_title} took ${elapsed}s"
 	fi
 
-	output 2 '[PROC] Formatting combined block-list file '
-	json set message "$(get_text 'statusProcessing'): formatting combined block-list file"
+	start_time=$(date +%s)
+	step_title='Formatting combined block-list file'
+	output 2 "[PROC] ${step_title} "
+	json set message "$(get_text 'statusProcessing'): ${step_title}"
 	if [ -z "$outputFilterIPv6" ]; then
 		if sed "$outputFilter" "$B_TMP" > "$A_TMP"; then
 			output_ok
 		else
-			output_failn
+			output_fail
 			json add error 'errorDataFileFormatting'
 		fi
 	else
@@ -1634,17 +1662,22 @@ download_lists() {
 					sed "$outputFilterIPv6" "$B_TMP" >> "$A_TMP"; then
 					output_ok
 				else
-					output_failn
+					output_fail
 					json add error 'errorDataFileFormatting'
 				fi
 			;;
 		esac
 	fi
+	end_time=$(date +%s)
+	elapsed=$(( end_time - start_time ))
+	logger_debug "[PROC-DEBUG] ${step_title} took ${elapsed}s"
 
 	if [ -n "$outputAllowFilter" ] && [ -n "$allowed_domain" ]; then
 		rm -f "$SED_TMP"; touch "$SED_TMP";
-		output 2 "[PROC] Explicitly allowing domains in ${dns} "
-		json set message "$(get_text 'statusProcessing'): explicitly allowing domains"
+		start_time=$(date +%s)
+		step_title="Explicitly allowing domains in ${dns}"
+		output 2 "[PROC] ${step_title} "
+		json set message "$(get_text 'statusProcessing'): ${step_title}"
 		for hf in ${allowed_domain}; do
 			echo "$hf" | sed -E "$outputAllowFilter" >> "$SED_TMP"
 		done
@@ -1652,19 +1685,24 @@ download_lists() {
 			if cat "$SED_TMP" "$A_TMP" > "$B_TMP"; then
 				output_ok
 			else
-				output_failn
+				output_fail
 				json add error 'errorAllowListProcessing'
 			fi
 		else
-			output_failn
+			output_fail
 			json add error 'errorAllowListProcessing'
 		fi
+		end_time=$(date +%s)
+		elapsed=$(( end_time - start_time ))
+		logger_debug "[PROC-DEBUG] ${step_title} took ${elapsed}s"
 	else
 		mv "$A_TMP" "$B_TMP"
 	fi
 
-	output 2 "[PROC] Setting up ${dns} file "
-	json set message "$(get_text 'statusProcessing'): setting up ${dns} file"
+	start_time=$(date +%s)
+	step_title="Setting up ${dns} file"
+	output 2 "[PROC] ${step_title} "
+	json set message "$(get_text 'statusProcessing'): ${step_title}"
 
 	case "$dns" in
 		dnsmasq.conf|dnsmasq.ipset|dnsmasq.nftset)
@@ -1692,7 +1730,7 @@ download_lists() {
 			if mv "$B_TMP" "$outputFile"; then
 				output_ok
 			else
-				output_failn
+				output_fail
 				json add error 'errorMovingDataFile' "$outputFile"
 			fi
 			sed -i '1 i\server:' "$outputFile"
@@ -1701,30 +1739,36 @@ download_lists() {
 			if mv "$B_TMP" "$outputFile"; then
 				output_ok
 			else
-				output_failn
+				output_fail
 				json add error 'errorMovingDataFile' "$outputFile"
 			fi
 		;;
 	esac
 	if [ "$compressed_cache" -gt 0 ]; then
-		output 2 "[PROC] Creating ${dns} compressed cache "
-		json set message "$(get_text 'statusProcessing'): creating ${dns} compressed cache"
+		start_time=$(date +%s)
+		step_title="Creating ${dns} compressed cache"
+		output 2 "[PROC] ${step_title} "
+		json set message "$(get_text 'statusProcessing'): ${step_title}"
 		if adb_file 'create_gzip'; then
 			output_ok
 		else
-			output_failn
+			output_fail
 			json add error 'errorCreatingCompressedCache'
 		fi
 	else
 		rm -f "$outputGzip"
 	fi
+	end_time=$(date +%s)
+	elapsed=$(( end_time - start_time ))
+	logger_debug "[PROC-DEBUG] ${step_title} took ${elapsed}s"
+
 	output 2 '[PROC] Removing temporary files '
 	json set message "$(get_text 'statusProcessing'): removing temporary files"
-	rm -f "/tmp/${packageName}_tmp.*" "$A_TMP" "$B_TMP" "$SED_TMP" "$outputCache" || j=1
+	rm -f "/tmp/${packageName}_tmp."* "$ALLOWED_TMP" "$A_TMP" "$B_TMP" "$SED_TMP" "$outputCache" || j=1
 	if [ $j -eq 0 ]; then
 		output_ok
 	else
-		output_failn
+		output_fail
 		json add error 'errorRemovingTempFiles'
 	fi
 	output 1 '\n'
@@ -1991,21 +2035,19 @@ adb_config_update() {
 		adb_file 'test_gzip' && return 0 
 	fi
 	output 1 'Updating config '
+	output 2 "[DL] Config  Update:  $label "
 	while [ -z "$R_TMP" ] || [ -e "$R_TMP" ]; do
 		R_TMP="$(mktemp -u -q -t "${packageName}_tmp.XXXXXXXX")"
 	done
 	if ! $dl_command "$config_update_url" "$dl_flag" "$R_TMP" 2>/dev/null || [ ! -s "$R_TMP" ]; then
 		append_newline "$R_TMP"
-		output 1 "$_FAIL_\n"
-		output 2 "[DL] Config  Update:  $label $__FAIL__\n"
+		output_failn
 		json add error 'errorDownloadingConfigUpdate'
 	else
 		if [ -s "$R_TMP" ] && sed -f "$R_TMP" -i "$packageConfigFile" 2>/dev/null; then
-			output 1 "$_OK_\n"
-			output 2 "[DL] Config  Update:  $label $__OK__\n"
+			output_okn
 		else
-			output 1 "$_FAIL_\n"
-			output 2 "[DL] Config  Update:  $label $__FAIL__\n"
+			output_failn
 			json add error 'errorParsingConfigUpdate'
 		fi
 	fi
