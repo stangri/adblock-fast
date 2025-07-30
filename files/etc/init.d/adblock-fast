@@ -13,6 +13,8 @@ LC_ALL=C
 if type extra_command 1>/dev/null 2>&1; then
 	extra_command 'allow' 'Allows domain in current block-list and config'
 	extra_command 'check' 'Checks if specified domain is found in current block-list'
+	extra_command 'check_tld' 'Checks if any TLDs are found in current block-list'
+	extra_command 'check_leading_dot' 'Checks if leading-dot domains are found in current block-list'
 	extra_command 'check_lists' 'Checks if specified domain is found in enabled block-lists'
 	extra_command 'dl' 'Force-downloads all enabled block-list'
 	extra_command 'killcache' 'Delete all cached files'
@@ -1948,6 +1950,64 @@ adb_check() {
 	done
 }
 
+adb_check_tld() {
+	local c param="$1"
+	local validation_result="$3"
+	load_environment "$validation_result" 'quiet' || return 1
+	if ! adb_file 'test'; then
+		output "No block-list ('$outputFile') found.\n"
+		return 0
+	fi
+	c="$(grep -c -v '\.' "$outputFile")"
+	if [ "$c" -gt 0 ]; then
+		if [ "$c" -eq 1 ]; then
+			output 1 "Found 1 match for TLD in '$outputFile'.\n"
+			output 2 "[PROC] Found 1 match for TLD in '$outputFile'.\n"
+		else
+			output 1 "Found $c matches for TLDs in '$outputFile'.\n"
+			output 2 "[PROC] Found $c matches for TLDs in '$outputFile'.\n"
+		fi
+		if [ "$c" -le 20 ]; then
+			grep -v '\.' "$outputFile" | sed "$outputOutputFilter"
+		fi
+	else
+		output 1 "No TLD was found in current block-list ('$outputFile').\n"
+		output 2 "[PROC] No TLD was found in current block-list ('$outputFile').\n"
+	fi
+}
+
+adb_check_leading_dot() {
+	local c param="$1"
+	local validation_result="$3"
+	local string
+	load_environment "$validation_result" 'quiet' || return 1
+	if ! adb_file 'test'; then
+		output "No block-list ('$outputFile') found.\n"
+		return 0
+	fi
+	case "$dns" in
+		dnsmasq.*)	string='/\.';;
+		smartdns.*)	string='^\.';;
+		unbound.*)	string='"\.';;
+	esac
+	c="$(grep -c "$string" "$outputFile")"
+	if [ "$c" -gt 0 ]; then
+		if [ "$c" -eq 1 ]; then
+			output 1 "Found 1 match for leading-dot domain in '$outputFile'.\n"
+			output 2 "[PROC] Found 1 match for leading-dot domain in '$outputFile'.\n"
+		else
+			output 1 "Found $c matches for leading-dot domains in '$outputFile'.\n"
+			output 2 "[PROC] Found $c matches for leading-dot domains in '$outputFile'.\n"
+		fi
+		if [ "$c" -le 20 ]; then
+			grep "$string" "$outputFile" | sed "$outputOutputFilter"
+		fi
+	else
+		output 1 "No leading-dot domain was found in current block-list ('$outputFile').\n"
+		output 2 "[PROC] No leading-dot domain was found in current block-list ('$outputFile').\n"
+	fi
+}
+
 adb_check_lists() {
 # shellcheck disable=SC2317
 	_check_list() {
@@ -2404,6 +2464,8 @@ boot() {
 	rc_procd start_service 'on_boot' && service_started 'on_boot'
 }
 check() { load_validate_config 'config' adb_check "'$*'"; }
+check_tld() { load_validate_config 'config' adb_check_tld "'$*'"; }
+check_leading_dot() { load_validate_config 'config' adb_check_leading_dot "'$*'"; }
 check_lists() { load_validate_config 'config' adb_check_lists "'$*'"; }
 dl() { rc_procd start_service 'download'; }
 killcache() {
