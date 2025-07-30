@@ -1363,7 +1363,7 @@ process_file_url() {
 		[ ! -s "$R_TMP" ]; then
 		output 1 "$_FAIL_"
 		output 2 "[DL] $type $label $__FAIL__\n"
-		echo "errorDownloadingList|${name:-$url}" >> "$runningErrorFile"
+		echo "errorDownloadingList|${url}" >> "$runningErrorFile"
 	else
 		append_newline "$R_TMP"
 		[ -n "$cfg" ] && new_size="$(get_local_filesize "$R_TMP")"
