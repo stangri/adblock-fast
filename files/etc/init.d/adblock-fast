@@ -2537,6 +2537,10 @@ service_triggers() {
 		output 2 '[TRIGGER] Setting trigger (on_boot) '
 		procd_add_raw_trigger "interface.*.up" 5000 "/etc/init.d/${packageName}" start && output_okn || output_failn
 	else
+	procd_open_validate
+		load_validate_config
+		load_validate_file_url_section
+	procd_close_validate
 		config_load "$packageName"
 		config_get_bool procd_trigger_wan6 'config' 'procd_trigger_wan6' '0'
 		network_flush_cache
@@ -2564,6 +2568,7 @@ stop_service() { load_validate_config 'config' adb_stop "'$*'"; }
 pause() { load_validate_config 'config' adb_pause "'$*'"; }
 version() { echo "$PKG_VERSION"; }
 
+# shellcheck disable=SC2120
 load_validate_file_url_section() {
 	uci_load_validate "$packageName" "$packageName" "$1" "$2" \
 		'enabled:bool:1' \
