@@ -1,6 +1,5 @@
-# SPDX-Identifier-License: AGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright 2023-2025 MOSSDeF, Stan Grishin (stangri@melmac.ca).
-# TLD optimization written by Dirk Brenken (dev@brenken.org).
 
 include $(TOPDIR)/rules.mk
 

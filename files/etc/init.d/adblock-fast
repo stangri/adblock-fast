@@ -1504,7 +1504,7 @@ download_lists() {
 		local i free_mem total_sizes
 		free_mem="$(get_mem_available)"
 		if [ -z "$free_mem" ]; then
-			json add warnning 'warningFreeRamCheckFail'
+			json add warning 'warningFreeRamCheckFail'
 			output_warning "$(get_text 'warningFreeRamCheckFail')"
 			return 0
 		fi
