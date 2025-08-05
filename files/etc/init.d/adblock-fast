@@ -659,7 +659,7 @@ get_text() {
 		warningSanityCheckTLD) printf "Sanity check discovered TLDs in %s" "$@";;
 		warningSanityCheckLeadingDot) printf "Sanity check discovered leading dots in %s" "$@";;
 
-		*) printf "Unknown text '%s'" "$@";;
+		*) printf "Unknown error/warning '%s'" "$@";;
 	esac
 }
 
