@@ -1,74 +1,133 @@
+permissions:
+  contents: write
 name: Build OpenWrt Package
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build ${{ github.repository }} for ${{ matrix.target }} (${{ matrix.sdk_version }})
+    name: Build for ${{ matrix.version }} / ${{ matrix.target }}
     runs-on: ubuntu-latest
+    env:
+      REPO_APK_KEY: ${{ secrets.REPO_APK_KEY }}
 
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - x86_64
-        #          - aarch64_cortex-a53
-        #          - aarch64_generic
-        #          - arm_cortex-a7
-        #          - arm_cortex-a9
-        #          - mips_24kc
-        #          - mipsel_24kc
-        sdk_version:
-          - openwrt-24.10
-          - snapshots
+        include:
+          - version: openwrt-24.10
+            target: x86_64
+            suffix: all
+          # - version: openwrt-24.10
+          #   target: aarch64_cortex-a53
+          # - version: openwrt-24.10
+          #   target: aarch64_generic
+          # - version: openwrt-24.10
+          #   target: arm_cortex-a7
+          # - version: openwrt-24.10
+          #   target: arm_cortex-a9
+          # - version: openwrt-24.10
+          #   target: mips_24kc
+          # - version: openwrt-24.10
+          #   target: mipsel_24kc
+          - version: snapshots
+            target: x86_64
+            suffix: noarch
+          # - version: snapshots
+          #   target: aarch64_cortex-a53
+          # - version: snapshots
+          #   target: aarch64_generic
+          # - version: snapshots
+          #   target: arm_cortex-a7
+          # - version: snapshots
+          #   target: arm_cortex-a9
+          # - version: snapshots
+          #   target: mips_24kc
+          # - version: snapshots
+          #   target: mipsel_24kc
 
     steps:
       - name: 🧾 Checkout repo
         uses: actions/checkout@v4
 
+      - name: 📛 Set PKG_NAME from repo
+        run: echo "PKG_NAME=${{ github.event.repository.name }}" >> "$GITHUB_ENV"
+
       - name: 🧰 Set up melmac feed structure
         run: |
-          # Create the standard OpenWrt feeds directory structure
-          mkdir -p feed/ 
-          # Copy all files to create the feed structure
-          rsync -av --exclude='.git' --exclude='feed' ./ feed/
+          # Create a proper OpenWrt feed layout where each package lives in its own subdir
+          mkdir -p feed/${PKG_NAME}
+          # Copy the package sources into the feed subdir (exclude CI and feed itself)
+          rsync -av \
+            --exclude='.git' \
+            --exclude='feed' \
+            --exclude='.github' \
+            ./ feed/${PKG_NAME}/
+
+      - name: 🧮 Compute ARCH
+        run: |
+          if [ "${{ matrix.version }}" = "snapshots" ]; then
+            echo "ARCH=${{ matrix.target }}-SNAPSHOT" >> "$GITHUB_ENV"
+          else
+            echo "ARCH=${{ matrix.target }}-${{ matrix.version }}" >> "$GITHUB_ENV"
+          fi
 
       - name: 🏗️ Build with OpenWrt SDK
         uses: openwrt/gh-action-sdk@v8
         env:
-          ARCH: ${{ matrix.target }}
+          ARCH: ${{ env.ARCH }}
           FEEDNAME: melmac
-          PACKAGES: adblock-fast
-          VERSION: ${{ matrix.sdk_version }}
-          INDEX: 1
+          PACKAGES: ${{ env.PKG_NAME }}
+          INDEX: 0
+          FEED_DIR: ${{ github.workspace }}/feed
+          NO_SHFMT_CHECK: 1
+          NO_REFRESH_CHECK: 1
+          PRIVATE_KEY: ${{ secrets.REPO_APK_KEY }}
 
-      - name: 🔍 Debug build output
+      #      - name: 🔍 Debug build output
+      #        run: |
+      #          echo "=== Build directory structure ==="
+      #          find . -name "*.ipk" -type f 2>/dev/null || echo "No .ipk files found"
+      #          echo "=== bin directory structure ==="
+      #          ls -la bin/ 2>/dev/null || echo "No bin directory found"
+      #          if [ -d "bin/packages" ]; then
+      #            echo "=== packages directory structure ==="
+      #            find bin/packages/ -type f -name "*.ipk" 2>/dev/null || echo "No .ipk files in packages directory"
+      #            echo "=== Full packages directory tree ==="
+      #            ls -laR bin/packages/ 2>/dev/null || echo "No packages directory"
+      #          fi
+
+      - name: 🏷️ Rename APK with version and target
         run: |
-          echo "=== Build directory structure ==="
-          find . -name "*.ipk" -type f 2>/dev/null || echo "No .ipk files found"
-          echo "=== bin directory structure ==="
-          ls -la bin/ 2>/dev/null || echo "No bin directory found"
-          if [ -d "bin/packages" ]; then
-            echo "=== packages directory structure ==="
-            find bin/packages/ -type f -name "*.ipk" 2>/dev/null || echo "No .ipk files in packages directory"
-            echo "=== Full packages directory tree ==="
-            ls -laR bin/packages/ 2>/dev/null || echo "No packages directory"
-          fi
+          set -euo pipefail
+          PKG_VERSION=$(grep -E '^PKG_VERSION *:?=' Makefile | head -n1 | cut -d= -f2 | tr -d '[:space:]')
+          PKG_RELEASE=$(grep -E '^PKG_RELEASE *:?=' Makefile | head -n1 | cut -d= -f2 | tr -d '[:space:]')
+          for ext in ipk apk; do
+            for f in $(find bin/packages -type f -path "*/melmac/*.${ext}"); do
+              dir=$(dirname "$f")
+              if [ -n "${{ matrix.suffix }}" ]; then
+                mv -v "$f" "$dir/${PKG_NAME}-${PKG_VERSION}-${PKG_RELEASE}_${{ matrix.version }}_${{ matrix.suffix }}.${ext}"
+              else
+                mv -v "$f" "$dir/${PKG_NAME}-${PKG_VERSION}-${PKG_RELEASE}_${{ matrix.version }}_${{ matrix.target }}.${ext}"
+              fi
+            done
+          done
 
       - name: 📦 Upload artifact for ${{ matrix.target }}
         uses: actions/upload-artifact@v4
         with:
-          name: adblock-fast-${{ matrix.target }}-${{ matrix.sdk_version }}
+          name: ${{ env.PKG_NAME }}-${{ matrix.target }}-${{ matrix.version }}
           path: |
-            bin/packages/*/melmac/adblock-fast*.ipk
-            bin/packages/*/melmac/adblock-fast*.apk
-            bin/packages/*/melmac/Packages*
-            bin/packages/*/*/*.ipk
-            bin/packages/*/*/*.apk
-          if-no-files-found: warn
+            bin/packages/*/melmac/${{ env.PKG_NAME }}*.ipk
+            bin/packages/*/melmac/${{ env.PKG_NAME }}*.apk
+          #            bin/packages/*/melmac/Packages*
+          #            bin/packages/*/melmac/index.json
+          #            bin/packages/*/melmac/packages.adb
+          if-no-files-found: ignore
 
   release:
     name: Release ${{ github.repository }}
