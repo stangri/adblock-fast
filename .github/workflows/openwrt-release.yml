@@ -44,6 +44,8 @@ jobs:
           PACKAGES: adblock-fast
           VERSION: ${{ matrix.sdk_version }}
           INDEX: 1
+          FEED_DIR: ${{ github.workspace }}/feed
+          NO_DEFAULT_FEEDS: 1
 
       - name: 🔍 Debug build output
         run: |

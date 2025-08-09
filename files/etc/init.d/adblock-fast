@@ -455,69 +455,54 @@ json() {
 		[ "$param" = 'warning' ] && param='warnings'
 		{ json_load_file "$runningStatusFile" || json_init; } >/dev/null 2>&1
 		{ json_select 'data' || { json_add_object 'data'; json_close_object; json_select 'data'; }; } >/dev/null 2>&1
-		case "$action" in
-			'get')
-				case "$param" in
-					'errors'|'warnings')
-						json_select "$param" >/dev/null 2>&1 || return
-						if [ -z "$value" ]; then
-							json_get_keys i
-						else
-							json_select "$value" >/dev/null 2>&1
-							case "${info:-code}" in
-								'code'|'info') json_get_var 'i' "$info" >/dev/null 2>&1;;
-							esac
-						fi
-						printf "%b" "$i"
-						return
-					;;
-					'status'|'message'|'stats'|*)
-						json_get_var 'i' "$param" >/dev/null 2>&1
-						printf "%b" "$i"
-						return
-					;;
-				esac
+		case "${action}:${param}" in
+			'get:errors'|'get:warnings')
+				json_select "$param" >/dev/null 2>&1 || return
+				if [ -z "$value" ]; then
+					json_get_keys i
+				else
+					json_select "$value" >/dev/null 2>&1
+					case "${info:-code}" in
+						'code'|'info') json_get_var 'i' "$info" >/dev/null 2>&1;;
+					esac
+				fi
+				printf "%b" "$i"
+				return
 			;;
-			'add')
-				case "$param" in
-					'errors'|'warnings')
-						{ json_select "$param" || json_add_array "$param"; } >/dev/null 2>&1
-						json_add_object ""
-						json_add_string 'code' "$value"
-						json_add_string 'info' "$info"
-						json_close_object
-						json_select ..
-					;;
-					*)
-						json_add_string "$param" "$value"
-					;;
-				esac
+			get:*)
+				json_get_var 'i' "$param" >/dev/null 2>&1
+				printf "%b" "$i"
+				return
 			;;
-			'del')
-				case "$param" in
-					'all')
-						json_add_string status ''
-						json_add_string message ''
-						json_add_string stats ''
-						json_add_array errors
-						json_close_array
-						json_add_array warnings
-						json_close_array
-					;;
-					'errors'|'warnings')
-						json_add_array "$param"
-						json_close_array
-					;;
-					*)
-						json_add_string "$param" '';;
-				esac
+			'add:errors'|'add:warnings')
+				{ json_select "$param" || json_add_array "$param"; } >/dev/null 2>&1
+				json_add_object ""
+				json_add_string 'code' "$value"
+				json_add_string 'info' "$info"
+				json_close_object
+				json_select ..
 			;;
-			set)
-				case "$param" in
-					'status'|'message'|'stats')
-						json_add_string "$param" "$value"
-					;;
-				esac
+			add:*)
+				json_add_string "$param" "$value"
+			;;
+			'del:all')
+				json_add_string status ''
+				json_add_string message ''
+				json_add_string stats ''
+				json_add_array errors
+				json_close_array
+				json_add_array warnings
+				json_close_array
+			;;
+			'del:errors'|'del:warnings')
+				json_add_array "$param"
+				json_close_array
+			;;
+			del:*)
+				json_add_string "$param" ''
+			;;
+			'set:status'|'set:message'|'set:stats')
+				json_add_string "$param" "$value"
 			;;
 		esac
 		json_add_string 'version' "$PKG_VERSION"
