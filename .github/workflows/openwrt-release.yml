@@ -9,23 +9,41 @@ on:
 
 jobs:
   build:
-    name: Build ${{ github.repository }} for ${{ matrix.target }} (${{ matrix.sdk_version }})
+    name: Build for ${{ matrix.sdk_version }} / ${{ matrix.target }}
     runs-on: ubuntu-latest
 
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
-        target:
-          - x86_64
-          - aarch64_cortex-a53
-          - aarch64_generic
-          - arm_cortex-a7
-          - arm_cortex-a9
-          - mips_24kc
-          - mipsel_24kc
-        sdk_version:
-          - openwrt-24.10
-          - snapshots
+        include:
+          - sdk_version: openwrt-24.10
+            target: x86_64
+          #          - sdk_version: openwrt-24.10
+          #            target: aarch64_cortex-a53
+          #          - sdk_version: openwrt-24.10
+          #            target: aarch64_generic
+          #          - sdk_version: openwrt-24.10
+          #            target: arm_cortex-a7
+          #          - sdk_version: openwrt-24.10
+          #            target: arm_cortex-a9
+          #          - sdk_version: openwrt-24.10
+          #            target: mips_24kc
+          #          - sdk_version: openwrt-24.10
+          #            target: mipsel_24kc
+          - sdk_version: snapshots
+            target: x86_64
+          #          - sdk_version: snapshots
+          #            target: aarch64_cortex-a53
+          #          - sdk_version: snapshots
+          #            target: aarch64_generic
+          #          - sdk_version: snapshots
+          #            target: arm_cortex-a7
+          #          - sdk_version: snapshots
+          #            target: arm_cortex-a9
+          #          - sdk_version: snapshots
+          #            target: mips_24kc
+          #          - sdk_version: snapshots
+          #            target: mipsel_24kc
 
     steps:
       - name: 🧾 Checkout repo
@@ -54,18 +72,18 @@ jobs:
           NO_SHFMT_CHECK: 1
           NO_REFRESH_CHECK: 1
 
-      #      - name: 🔍 Debug build output
-      #        run: |
-      #          echo "=== Build directory structure ==="
-      #          find . -name "*.ipk" -type f 2>/dev/null || echo "No .ipk files found"
-      #          echo "=== bin directory structure ==="
-      #          ls -la bin/ 2>/dev/null || echo "No bin directory found"
-      #          if [ -d "bin/packages" ]; then
-      #            echo "=== packages directory structure ==="
-      #            find bin/packages/ -type f -name "*.ipk" 2>/dev/null || echo "No .ipk files in packages directory"
-      #            echo "=== Full packages directory tree ==="
-      #            ls -laR bin/packages/ 2>/dev/null || echo "No packages directory"
-      #          fi
+      - name: 🔍 Debug build output
+        run: |
+          echo "=== Build directory structure ==="
+          find . -name "*.ipk" -type f 2>/dev/null || echo "No .ipk files found"
+          echo "=== bin directory structure ==="
+          ls -la bin/ 2>/dev/null || echo "No bin directory found"
+          if [ -d "bin/packages" ]; then
+            echo "=== packages directory structure ==="
+            find bin/packages/ -type f -name "*.ipk" 2>/dev/null || echo "No .ipk files in packages directory"
+            echo "=== Full packages directory tree ==="
+            ls -laR bin/packages/ 2>/dev/null || echo "No packages directory"
+          fi
 
       - name: 📦 Upload artifact for ${{ matrix.target }}
         uses: actions/upload-artifact@v4
@@ -74,9 +92,9 @@ jobs:
           path: |
             bin/packages/*/melmac/adblock-fast*.ipk
             bin/packages/*/melmac/adblock-fast*.apk
-            bin/packages/*/melmac/Packages*
-            bin/packages/*/*/*.ipk
-            bin/packages/*/*/*.apk
+          #            bin/packages/*/melmac/Packages*
+          #            bin/packages/*/melmac/index.json
+          #            bin/packages/*/melmac/packages.adb
           if-no-files-found: warn
 
   release:
