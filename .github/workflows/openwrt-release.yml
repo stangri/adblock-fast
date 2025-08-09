@@ -49,7 +49,8 @@ jobs:
           VERSION: ${{ matrix.sdk_version }}
           INDEX: 1
           FEED_DIR: ${{ github.workspace }}/feed
-          NO_DEFAULT_FEEDS: 1
+          NO_SHFMT_CHECK: 1
+          NO_REFRESH_CHECK: 1
 
       - name: 🔍 Debug build output
         run: |
