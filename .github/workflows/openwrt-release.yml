@@ -1,3 +1,5 @@
+permissions:
+  contents: write
 name: Build OpenWrt Package
 
 on:
@@ -15,12 +17,12 @@ jobs:
       matrix:
         target:
           - x86_64
-        #          - aarch64_cortex-a53
-        #          - aarch64_generic
-        #          - arm_cortex-a7
-        #          - arm_cortex-a9
-        #          - mips_24kc
-        #          - mipsel_24kc
+          - aarch64_cortex-a53
+          - aarch64_generic
+          - arm_cortex-a7
+          - arm_cortex-a9
+          - mips_24kc
+          - mipsel_24kc
         sdk_version:
           - openwrt-24.10
           - snapshots
@@ -52,18 +54,18 @@ jobs:
           NO_SHFMT_CHECK: 1
           NO_REFRESH_CHECK: 1
 
-      - name: 🔍 Debug build output
-        run: |
-          echo "=== Build directory structure ==="
-          find . -name "*.ipk" -type f 2>/dev/null || echo "No .ipk files found"
-          echo "=== bin directory structure ==="
-          ls -la bin/ 2>/dev/null || echo "No bin directory found"
-          if [ -d "bin/packages" ]; then
-            echo "=== packages directory structure ==="
-            find bin/packages/ -type f -name "*.ipk" 2>/dev/null || echo "No .ipk files in packages directory"
-            echo "=== Full packages directory tree ==="
-            ls -laR bin/packages/ 2>/dev/null || echo "No packages directory"
-          fi
+      #      - name: 🔍 Debug build output
+      #        run: |
+      #          echo "=== Build directory structure ==="
+      #          find . -name "*.ipk" -type f 2>/dev/null || echo "No .ipk files found"
+      #          echo "=== bin directory structure ==="
+      #          ls -la bin/ 2>/dev/null || echo "No bin directory found"
+      #          if [ -d "bin/packages" ]; then
+      #            echo "=== packages directory structure ==="
+      #            find bin/packages/ -type f -name "*.ipk" 2>/dev/null || echo "No .ipk files in packages directory"
+      #            echo "=== Full packages directory tree ==="
+      #            ls -laR bin/packages/ 2>/dev/null || echo "No packages directory"
+      #          fi
 
       - name: 📦 Upload artifact for ${{ matrix.target }}
         uses: actions/upload-artifact@v4
@@ -99,6 +101,18 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: ./release-assets
+
+      - name: 🏷️ Disambiguate APK filenames per matrix
+        run: |
+          set -euo pipefail
+          # Rename each APK to include its artifact (matrix) folder name
+          # Example: adblock-fast-1.1.4-r6.apk -> adblock-fast-1.1.4-r6__adblock-fast-x86_64-openwrt-24.10.apk
+          while IFS= read -r -d '' f; do
+            dir="$(basename "$(dirname "$f")")"
+            base="$(basename "$f")"
+            stem="${base%.apk}"
+            mv -v "$f" "$(dirname "$f")/${stem}__${dir}.apk"
+          done < <(find ./release-assets -type f -name '*.apk' -print0)
 
       - name: 🗃️ Create GitHub Release
         uses: softprops/action-gh-release@v2
