@@ -3,7 +3,7 @@
 # shellcheck disable=SC2015,SC3023,SC3043
 
 # shellcheck disable=SC2034
-START=94
+START=50
 # shellcheck disable=SC2034
 USE_PROCD=1
 LC_ALL=C
@@ -432,6 +432,7 @@ print_json_string() { json_init; json_add_string "$1" "$2"; json_dump; json_clea
 sanitize_domain() { printf '%s' "$1" | sed -E 's#^[a-z]+://##; s#/.*$##; s/:.*$//'; }
 sanitize_dir() { [ -d "$(readlink -fn "$1")" ] && readlink -fn "$1"; }
 smartdns_restart() { /etc/init.d/smartdns restart >/dev/null 2>&1; }
+# shellcheck disable=SC3060
 str_contains() { [ "${1//$2}" != "$1" ]; }
 str_contains_word() { echo "$1" | grep -qw "$2"; }
 str_first_word() { echo "${1%% *}"; }
@@ -1015,7 +1016,7 @@ resolver() {
 			;;
 		esac
 	}
-# shellcheck disable=SC2317
+# shellcheck disable=SC2317,SC2329
 	_unbound_instance_append_force_dns_port() {
 		[ -s "/etc/config/unbound" ] || return 0
 		[ -n "$(uci_get 'unbound' "$cfg")" ] || return 1
@@ -1242,6 +1243,8 @@ resolver() {
 					chown root:root "$outputFile" "$outputConfig" >/dev/null 2>/dev/null
 				;;
 				unbound.*)
+					config_load 'unbound'
+					config_foreach _unbound_instance_append_force_dns_port 'unbound'
 					chmod 660 "$outputFile"
 					chown root:unbound "$outputFile" >/dev/null 2>/dev/null
 				;;
@@ -1471,7 +1474,7 @@ download_dnsmasq_file() {
 }
 
 download_lists() {
-# shellcheck disable=SC2317
+# shellcheck disable=SC2317,SC2329
 	_ram_check() {
 		_config_calculate_sizes() {
 			local cfg="$1"
@@ -1490,7 +1493,7 @@ download_lists() {
 			output_warning "$(get_text 'warningFreeRamCheckFail')"
 			return 0
 		fi
-		config_load "$packageName"
+		config_load "$packageName"w
 		config_foreach _config_calculate_sizes 'file_url'
 		if [ $((free_mem)) -lt $((total_sizes * 2)) ]; then
 			json add error 'errorTooLittleRam' "$free_mem"
@@ -2018,7 +2021,7 @@ adb_check_leading_dot() {
 }
 
 adb_check_lists() {
-# shellcheck disable=SC2317
+# shellcheck disable=SC2317,SC2329
 	_check_list() {
 		local cfg="$1"
 		local en size url name R_TMP string c
@@ -2080,7 +2083,7 @@ adb_check_lists() {
 }
 
 adb_config_update() {
-# shellcheck disable=SC2317
+# shellcheck disable=SC2317,SC2329
 	_cleanup_missing_urls() {
 		local cfg="$1" url size
 		config_get url "$cfg" url
@@ -2134,7 +2137,7 @@ adb_show_blocklist() {
 }
 
 adb_sizes() {
-# shellcheck disable=SC2317
+# shellcheck disable=SC2329
 	_config_add_url_size() {
 		local cfg="$1" url name size
 		config_get url "$cfg" url
@@ -2160,6 +2163,9 @@ adb_sizes() {
 adb_start() {
 	local action status error message stats p iface k
 	local param="$1" validation_result="$3"
+
+	dns_set_output_values "$dns"
+	adb_file test_gzip && unset adbf_boot_flag
 
 	[ -n "$adbf_boot_flag" ] && return 0
 	load_environment "$validation_result" "$param" || return 1
