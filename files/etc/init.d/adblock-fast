@@ -432,7 +432,7 @@ print_json_string() { json_init; json_add_string "$1" "$2"; json_dump; json_clea
 sanitize_domain() { printf '%s' "$1" | sed -E 's#^[a-z]+://##; s#/.*$##; s/:.*$//'; }
 sanitize_dir() { [ -d "$(readlink -fn "$1")" ] && readlink -fn "$1"; }
 smartdns_restart() { /etc/init.d/smartdns restart >/dev/null 2>&1; }
-str_contains() { test "$1" != "$(str_replace "$1" "$2" '')"; }
+str_contains() { [ "${1//$2}" != "$1" ]; }
 str_contains_word() { echo "$1" | grep -qw "$2"; }
 str_first_word() { echo "${1%% *}"; }
 # shellcheck disable=SC2018,SC2019
