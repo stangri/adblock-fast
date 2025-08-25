@@ -26,7 +26,7 @@ fi
 
 readonly packageName='adblock-fast'
 readonly PKG_VERSION='dev-test'
-readonly packageCompat='7'
+readonly packageCompat='8'
 readonly serviceName="$packageName $PKG_VERSION"
 readonly packageMemoryThreshold='33554432'
 readonly packageConfigFile="/etc/config/${packageName}"
@@ -636,6 +636,8 @@ get_text() {
 		statusProcessing) printf "Processing";;
 		statusFail) printf "Failed to start";;
 		statusSuccess) printf "Success";;
+		statusTriggerBootWait) printf "Waiting for trigger (on_boot)";;
+		statusTriggerStartWait) printf "Waiting for trigger (on_start)";;
 
 		warningExternalDnsmasqConfig)
 			printf "Use of external dnsmasq config file detected, please set 'dns' option to 'dnsmasq.conf'";;
@@ -2531,6 +2533,7 @@ service_triggers() {
 		output 1 'Setting trigger (on_boot) '
 		output 2 '[TRIG] Setting trigger (on_boot) '
 		procd_add_raw_trigger "interface.*.up" 5000 "/etc/init.d/${packageName}" start && output_okn || output_failn
+		json set status 'statusTriggerBootWait'
 	else
 	procd_open_validate
 		load_validate_config
@@ -2551,6 +2554,7 @@ service_triggers() {
 			procd_add_interface_trigger "interface.*" "$i" "/etc/init.d/${packageName}" start && output_okn || output_failn
 		done
 		procd_add_config_trigger "config.change" "$packageName" "/etc/init.d/${packageName}" reload
+		[ -z "$(json get status)" ] && json set status 'statusTriggerStartWait'
 	fi
 }
 sizes() { load_validate_config 'config' adb_sizes "''"; }
