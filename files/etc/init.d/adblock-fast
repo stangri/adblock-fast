@@ -1495,7 +1495,7 @@ download_lists() {
 			output_warning "$(get_text 'warningFreeRamCheckFail')"
 			return 0
 		fi
-		config_load "$packageName"w
+		config_load "$packageName"
 		config_foreach _config_calculate_sizes 'file_url'
 		if [ $((free_mem)) -lt $((total_sizes * 2)) ]; then
 			json add error 'errorTooLittleRam' "$free_mem"
