@@ -990,7 +990,7 @@ resolver() {
 				confdir="$(get_dnsmasq_confdir "$cfg")"
 				ln -sf "$dnsmasqConfFile" "${confdir}/${dnsmasqConfSoftlinkFile}"
 				chmod 660 "${confdir}/${dnsmasqConfSoftlinkFile}"
-				chown root:dnsmasq "${confdir}/${dnsmasqConfSoftlinkFile}" >/dev/null 2>/dev/null
+				chown -h root:dnsmasq "${confdir}/${dnsmasqConfSoftlinkFile}" >/dev/null 2>/dev/null
 			;;
 			dnsmasq.servers)
 				# clean up other dnsmasq configs
