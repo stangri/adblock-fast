@@ -356,10 +356,6 @@ dns_set_output_values() {
 dnsmasq_hup() { killall -q -s HUP dnsmasq; }
 dnsmasq_kill() { killall -q -s KILL dnsmasq; }
 dnsmasq_restart() { /etc/init.d/dnsmasq restart >/dev/null 2>&1; }
-get_dnsmasq_confdir() {
-	[ -z "$dnsmasq_ubus" ] && dnsmasq_ubus="$(ubus call service list '{"name":"dnsmasq"}')"
-	echo "$dnsmasq_ubus" | jsonfilter -e "@.dnsmasq.instances.${1}.mount" | sed 's#\\/#/#g' | grep -oEm1 '/tmp/dnsmasq(\.[^"]*)?\.d'
-}
 is_enabled() { uci_get "$1" 'config' 'enabled' '0'; }
 is_fw4_restart_needed() {
 	[ "$fw4_restart_flag" = 'true' ] && return 0
@@ -413,7 +409,7 @@ get_mem_total() {
 led_on(){ if [ -n "${1}" ] && [ -e "${1}/trigger" ]; then echo 'default-on' > "${1}/trigger" 2>&1; fi; }
 led_off(){ if [ -n "${1}" ] &&  [ -e "${1}/trigger" ]; then echo 'none' > "${1}/trigger" 2>&1; fi; }
 logger() { /usr/bin/logger -t "$packageName" "$@"; }
-logger_debug() { /usr/bin/logger -t "$packageName [$$]" "$@"; }
+logger_debug() { [ -n "$proc_debug" ] && /usr/bin/logger -t "$packageName [$$]" "$@"; }
 nft() { "$nft" "$@" >/dev/null 2>&1; }
 output_dot() { output 1 "$_DOT_"; output 2 "$__DOT__"; }
 output_ok() { output 1 "$_OK_"; output 2 "$__OK__\n"; }
@@ -778,6 +774,7 @@ load_environment() {
 	heartbeat_domain="$(sanitize_domain "$heartbeat_domain")"
 	[ "$sanity_check" = '1' ] || unset sanity_check
 	[ "$update_config_sizes" = '1' ] || unset update_config_sizes
+	[ "$proc_debug" = '1' ] || unset proc_debug
 
 	case "$dns" in
 		dnsmasq.*)
@@ -952,6 +949,16 @@ load_environment() {
 }
 
 resolver() {
+	_dnsmasq_instance_get_confdir() {
+		local confdir
+		config_get confdir "$cfg" 'confdir'
+		if [ -n "$confdir" ]; then
+			echo "$confidr"
+			return 0
+		fi
+		[ -z "$dnsmasq_ubus" ] && dnsmasq_ubus="$(ubus call service list '{"name":"dnsmasq"}')"
+		echo "$dnsmasq_ubus" | jsonfilter -e "@.dnsmasq.instances.${1}.mount" | sed 's#\\/#/#g' | grep -oEm1 '/tmp/dnsmasq(\.[^"]*)?\.d'
+	}
 	_dnsmasq_instance_config() {
 		local cfg="$1" param="$2" confdir confdirFile
 		[ -s "/etc/config/dhcp" ] || return 0
@@ -959,7 +966,7 @@ resolver() {
 		case "$param" in
 			dnsmasq.addnhosts)
 				# clean up other dnsmasq configs
-				confdir="$(get_dnsmasq_confdir "$cfg")"
+				confdir="$(_dnsmasq_instance_get_confdir "$cfg")"
 				rm -f "${confdir}/${dnsmasqConfSoftlinkFile}" "${confdir}/${dnsmasqIpsetSoftlinkFile}" "${confdir}/${dnsmasqNftsetSoftlinkFile}"
 				uci_remove_list 'dhcp' "$cfg" addnmount "$dnsmasqConfFile"
 				if [ "$(uci_get 'dhcp' "$cfg" 'serversfile')" = "$dnsmasqServersFile" ]; then
@@ -970,7 +977,7 @@ resolver() {
 			;;
 			cleanup|unbound.adb_list)
 				# clean up all dnsmasq configs
-				confdir="$(get_dnsmasq_confdir "$cfg")"
+				confdir="$(_dnsmasq_instance_get_confdir "$cfg")"
 				rm -f "${confdir}/${dnsmasqConfSoftlinkFile}" "${confdir}/${dnsmasqIpsetSoftlinkFile}" "${confdir}/${dnsmasqNftsetSoftlinkFile}"
 				uci_remove_list 'dhcp' "$cfg" 'addnhosts' "$dnsmasqAddnhostsFile"
 				uci_remove_list 'dhcp' "$cfg" addnmount "$dnsmasqConfFile"
@@ -987,7 +994,7 @@ resolver() {
 				# add dnsmasq conf, ipset, nftset addnmounts to point to adblock-fast file
 				uci_add_list_if_new 'dhcp' "$cfg" addnmount "$dnsmasqConfFile"
 				# add softlink to adblock-fast file
-				confdir="$(get_dnsmasq_confdir "$cfg")"
+				confdir="$(_dnsmasq_instance_get_confdir "$cfg")"
 				ln -sf "$dnsmasqConfFile" "${confdir}/${dnsmasqConfSoftlinkFile}"
 				chmod 660 "${confdir}/${dnsmasqConfSoftlinkFile}"
 				chown -h root:dnsmasq "${confdir}/${dnsmasqConfSoftlinkFile}" >/dev/null 2>/dev/null
@@ -995,7 +1002,7 @@ resolver() {
 			dnsmasq.servers)
 				# clean up other dnsmasq configs
 				uci_remove_list 'dhcp' "$cfg" 'addnhosts' "$dnsmasqAddnhostsFile"
-				confdir="$(get_dnsmasq_confdir "$cfg")"
+				confdir="$(_dnsmasq_instance_get_confdir "$cfg")"
 				rm -f "${confdir}/${dnsmasqConfSoftlinkFile}" "${confdir}/${dnsmasqIpsetSoftlinkFile}" "${confdir}/${dnsmasqNftsetSoftlinkFile}"
 				uci_remove_list 'dhcp' "$cfg" addnmount "$dnsmasqConfFile"
 				# add dnsmasq servers config
@@ -2588,5 +2595,6 @@ load_validate_config() {
 		'allowed_domain:list(string)' \
 		'blocked_domain:list(string)' \
 		'dnsmasq_config_file_url:string' \
+		'proc_debug:bool:0' \
 		'load_environment_flag:string'
 }
