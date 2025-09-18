@@ -36,19 +36,16 @@ readonly dnsmasqAddnhostsGzip="${packageName}.dnsmasq.addnhosts.gz"
 readonly dnsmasqAddnhostsFilter='s|^|127.0.0.1 |;s|$||'
 readonly dnsmasqAddnhostsFilterIPv6='s|^|:: |;s|$||'
 readonly dnsmasqAddnhostsOutputFilter='s|^127.0.0.1 ||;s|^:: ||;'
-readonly dnsmasqConfSoftlinkFile="$packageName"
 readonly dnsmasqConfFile="/var/run/${packageName}/${packageName}.dnsmasq"
 readonly dnsmasqConfCache="/var/run/${packageName}/dnsmasq.conf.cache"
 readonly dnsmasqConfGzip="${packageName}.dnsmasq.conf.gz"
 readonly dnsmasqConfFilter='s|^|local=/|;s|$|/|'
 readonly dnsmasqConfOutputFilter='s|local=/||;s|/$||;'
-readonly dnsmasqIpsetSoftlinkFile="$packageName"
 readonly dnsmasqIpsetFile="/var/run/${packageName}/${packageName}.dnsmasq"
 readonly dnsmasqIpsetCache="/var/run/${packageName}/dnsmasq.ipset.cache"
 readonly dnsmasqIpsetGzip="${packageName}.dnsmasq.ipset.gz"
 readonly dnsmasqIpsetFilter='s|^|ipset=/|;s|$|/adb|'
 readonly dnsmasqIpsetOutputFilter='s|ipset=/||;s|/adb$||;'
-readonly dnsmasqNftsetSoftlinkFile="$packageName"
 readonly dnsmasqNftsetFile="/var/run/${packageName}/${packageName}.dnsmasq"
 readonly dnsmasqNftsetCache="/var/run/${packageName}/dnsmasq.nftset.cache"
 readonly dnsmasqNftsetGzip="${packageName}.dnsmasq.nftset.gz"
@@ -951,24 +948,20 @@ load_environment() {
 resolver() {
 	_dnsmasq_instance_get_confdir() {
 		local confdir
-		config_get confdir "$cfg" 'confdir'
-		if [ -n "$confdir" ]; then
-			echo "$confidr"
-			return 0
-		fi
 		[ -z "$dnsmasq_ubus" ] && dnsmasq_ubus="$(ubus call service list '{"name":"dnsmasq"}')"
-		echo "$dnsmasq_ubus" | jsonfilter -e "@.dnsmasq.instances.${1}.mount" | sed 's#\\/#/#g' | grep -oEm1 '/tmp/dnsmasq(\.[^"]*)?\.d'
+		config_get confdir "$cfg" 'confdir' "$(echo "$dnsmasq_ubus" | jsonfilter -e "@.dnsmasq.instances.${1}.mount" | sed 's#\\/#/#g' | grep -oEm1 '/tmp/dnsmasq(\.[^"]*)?\.d')"
+		echo "$confdir"
 	}
 	_dnsmasq_instance_config() {
-		local cfg="$1" param="$2" confdir confdirFile
+		local cfg="$1" param="$2" confdir
 		[ -s "/etc/config/dhcp" ] || return 0
 		[ -n "$(uci_get dhcp "$cfg")" ] || return 1
 		case "$param" in
 			dnsmasq.addnhosts)
 				# clean up other dnsmasq configs
 				confdir="$(_dnsmasq_instance_get_confdir "$cfg")"
-				rm -f "${confdir}/${dnsmasqConfSoftlinkFile}" "${confdir}/${dnsmasqIpsetSoftlinkFile}" "${confdir}/${dnsmasqNftsetSoftlinkFile}"
-				uci_remove_list 'dhcp' "$cfg" addnmount "$dnsmasqConfFile"
+				[ -n "$confdir" ] && rm -f "${confdir}/${packageName}"
+				uci_remove_list 'dhcp' "$cfg" 'addnmount' "$dnsmasqConfFile"
 				if [ "$(uci_get 'dhcp' "$cfg" 'serversfile')" = "$dnsmasqServersFile" ]; then
 					uci_remove 'dhcp' "$cfg" 'serversfile'
 				fi
@@ -978,9 +971,9 @@ resolver() {
 			cleanup|unbound.adb_list)
 				# clean up all dnsmasq configs
 				confdir="$(_dnsmasq_instance_get_confdir "$cfg")"
-				rm -f "${confdir}/${dnsmasqConfSoftlinkFile}" "${confdir}/${dnsmasqIpsetSoftlinkFile}" "${confdir}/${dnsmasqNftsetSoftlinkFile}"
+				[ -n "$confdir" ] && rm -f "${confdir}/${packageName}"
 				uci_remove_list 'dhcp' "$cfg" 'addnhosts' "$dnsmasqAddnhostsFile"
-				uci_remove_list 'dhcp' "$cfg" addnmount "$dnsmasqConfFile"
+				uci_remove_list 'dhcp' "$cfg" 'addnmount' "$dnsmasqConfFile"
 				if [ "$(uci_get 'dhcp' "$cfg" 'serversfile')" = "$dnsmasqServersFile" ]; then
 					uci_remove 'dhcp' "$cfg" 'serversfile'
 				fi
@@ -991,20 +984,21 @@ resolver() {
 				if [ "$(uci_get 'dhcp' "$cfg" 'serversfile')" = "$dnsmasqServersFile" ]; then
 					uci_remove 'dhcp' "$cfg" 'serversfile'
 				fi
-				# add dnsmasq conf, ipset, nftset addnmounts to point to adblock-fast file
-				uci_add_list_if_new 'dhcp' "$cfg" addnmount "$dnsmasqConfFile"
+				# add dnsmasq conf addnmount to point to adblock-fast file
+				uci_add_list_if_new 'dhcp' "$cfg" 'addnmount' "$dnsmasqConfFile"
 				# add softlink to adblock-fast file
 				confdir="$(_dnsmasq_instance_get_confdir "$cfg")"
-				ln -sf "$dnsmasqConfFile" "${confdir}/${dnsmasqConfSoftlinkFile}"
-				chmod 660 "${confdir}/${dnsmasqConfSoftlinkFile}"
-				chown -h root:dnsmasq "${confdir}/${dnsmasqConfSoftlinkFile}" >/dev/null 2>/dev/null
+				[ -n "$confdir" ] || return 1
+				ln -sf "$dnsmasqConfFile" "${confdir}/${packageName}"
+				chmod 660 "${confdir}/${packageName}"
+				chown -h root:dnsmasq "${confdir}/${packageName}" >/dev/null 2>/dev/null
 			;;
 			dnsmasq.servers)
 				# clean up other dnsmasq configs
 				uci_remove_list 'dhcp' "$cfg" 'addnhosts' "$dnsmasqAddnhostsFile"
 				confdir="$(_dnsmasq_instance_get_confdir "$cfg")"
-				rm -f "${confdir}/${dnsmasqConfSoftlinkFile}" "${confdir}/${dnsmasqIpsetSoftlinkFile}" "${confdir}/${dnsmasqNftsetSoftlinkFile}"
-				uci_remove_list 'dhcp' "$cfg" addnmount "$dnsmasqConfFile"
+				[ -n "$confdir" ] && rm -f "${confdir}/${packageName}"
+				uci_remove_list 'dhcp' "$cfg" 'addnmount' "$dnsmasqConfFile"
 				# add dnsmasq servers config
 				if [ "$(uci_get 'dhcp' "$cfg" 'serversfile')" != "$dnsmasqServersFile" ]; then
 					uci_set 'dhcp' "$cfg" 'serversfile' "$dnsmasqServersFile"
