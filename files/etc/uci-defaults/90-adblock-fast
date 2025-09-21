@@ -154,7 +154,7 @@ add_name() {
 if [ -s "/etc/config/${packageName}-opkg" ] && ! grep -q 'option name' "/etc/config/${packageName}"; then
 	config_load "$packageName"
 	config_foreach add_name 'file_url'
-	[ -n "$(uci_changes "$packageName")" ] && uci_commit "$packageName"
+	uci_changes "$packageName" && uci_commit "$packageName"
 fi
 
 exit 0

@@ -580,9 +580,8 @@ uci_changes() {
 	local PACKAGE="$1"
 	local CONFIG="$2"
 	local OPTION="$3"
-	if [ -s "${UCI_CONFIG_DIR:-/etc/config/}${PACKAGE}" ]; then
-		/sbin/uci ${UCI_CONFIG_DIR:+-c $UCI_CONFIG_DIR} changes "$PACKAGE${CONFIG:+.$CONFIG}${OPTION:+.$OPTION}"
-	fi
+	[ -s "${UCI_CONFIG_DIR:-/etc/config/}${PACKAGE}" ] && \
+	[ -n "$(/sbin/uci ${UCI_CONFIG_DIR:+-c $UCI_CONFIG_DIR} changes "$PACKAGE${CONFIG:+.$CONFIG}${OPTION:+.$OPTION}")" ]
 }
 
 get_text() {
@@ -1074,12 +1073,12 @@ resolver() {
 			if [ -s "/etc/config/dhcp" ]; then
 				config_load 'dhcp'
 				config_foreach _dnsmasq_instance_config 'dnsmasq' 'cleanup'
-				[ -n "$(uci_changes 'dhcp')" ] && uci_commit 'dhcp'
+				uci_changes 'dhcp' && uci_commit 'dhcp'
 			fi
 			if [ -s "/etc/config/smartdns" ]; then
 				config_load 'smartdns'
 				config_foreach _smartdns_instance_config 'smartdns' 'cleanup'
-				[ -n "$(uci_changes 'smartdns')" ] && uci_commit 'smartdns'
+				uci_changes 'smartdns' && uci_commit 'smartdns'
 			fi
 		;;
 		on_load)
@@ -1230,7 +1229,7 @@ resolver() {
 							_dnsmasq_instance_append_force_dns_port "@dnsmasq[$i]" || _dnsmasq_instance_append_force_dns_port "$i"
 						done
 					fi
-					[ -n "$(uci_changes dhcp)" ] && uci_commit 'dhcp'
+					uci_changes 'dhcp' && uci_commit 'dhcp'
 					if adb_file 'test'; then
 						chmod 660 "$outputFile"
 						chown root:dnsmasq "$outputFile" >/dev/null 2>/dev/null
@@ -1252,7 +1251,7 @@ resolver() {
 							_smartdns_instance_append_force_dns_port "@smartdns[$i]" || _smartdns_instance_append_force_dns_port "$i"
 						done
 					fi
-					[ -n "$(uci_changes smartdns)" ] && uci_commit 'smartdns'
+					uci_changes 'smartdns' && uci_commit 'smartdns'
 					chmod 660 "$outputFile" "$outputConfig"
 					chown root:root "$outputFile" "$outputConfig" >/dev/null 2>/dev/null
 				;;
@@ -1492,7 +1491,7 @@ download_lists() {
 	config_load "$packageName"
 	config_foreach load_validate_file_url_section 'file_url' process_file_url_wrapper
 	wait
-	if [ -n "$(uci_changes "$packageName")" ]; then 
+	if uci_changes "$packageName"; then
 		output 2 "[PROC] Saving updated file sizes "
 		if [ -n "$update_config_sizes" ] && uci_commit "$packageName"; then output_ok; else output_fail; fi
 	fi
@@ -2065,7 +2064,7 @@ adb_config_update() {
 	rm -f "$R_TMP"
 	config_load "$packageName"
 	config_foreach _cleanup_missing_urls 'file_url'
-	[ -n "$(uci_changes "$packageName")" ] && uci_commit "$packageName"
+	uci_changes "$packageName" && uci_commit "$packageName"
 	return 0
 }
 
@@ -2095,7 +2094,7 @@ adb_sizes() {
 	load_environment "$validation_result" 'quiet' || return 1
 	config_load "$packageName"
 	config_foreach _config_add_url_size 'file_url'
-	[ -n "$(uci_changes "$packageName")" ] && [ -n "$update_config_sizes" ] && uci_commit "$packageName"
+	uci_changes "$packageName" && [ -n "$update_config_sizes" ] && uci_commit "$packageName"
 }
 
 # shellcheck disable=SC2120
