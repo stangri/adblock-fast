@@ -961,7 +961,6 @@ load_environment() {
 	esac
 
 	if [ -n "$dnsmasq_config_file_url" ]; then
-		unset sanity_check
 		unset update_config_sizes
 		case "$dns" in
 			dnsmasq.conf) :;;
@@ -1026,10 +1025,11 @@ load_environment() {
 
 resolver() {
 	_dnsmasq_instance_get_confdir() {
-		local confdir
+		local cfg_file
 		[ -z "$dnsmasq_ubus" ] && dnsmasq_ubus="$(ubus call service list '{"name":"dnsmasq"}')"
-		config_get confdir "$cfg" 'confdir' "$(echo "$dnsmasq_ubus" | jsonfilter -e "@.dnsmasq.instances.${1}.mount" | sed 's#\\/#/#g' | grep -oEm1 '/tmp/dnsmasq(\.[^"]*)?\.d')"
-		echo "$confdir"
+		cfg_file="$(echo "$dnsmasq_ubus" | jsonfilter -e "@.dnsmasq.instances.${1}.command" \
+			| awk '{gsub(/\\\//,"/");gsub(/[][",]/,"");for(i=1;i<=NF;i++)if($i=="-C"){print $(i+1);exit}}')"
+		awk -F= '/^conf-dir=/{print $2; exit}' "$cfg_file"
 	}
 	_dnsmasq_instance_config() {
 		local cfg="$1" param="$2" confdir
@@ -1856,7 +1856,7 @@ start_service() {
 
 	case "$param" in
 		on_boot)
-			if adb_file test_gzip; then
+			if adb_file 'test_gzip' || adb_file 'test_cache'; then
 				unset adbf_boot_flag
 			else
 				return 0
