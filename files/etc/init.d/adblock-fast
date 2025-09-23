@@ -2214,6 +2214,7 @@ service_started() {
 	if [ -n "$compressed_cache" ]; then
 		start_time=$(date +%s)
 		step_title="Creating ${dns} compressed cache"
+		output 1 "${step_title} "
 		output 2 "[PROC] ${step_title} "
 		json set message "$(get_text 'statusProcessing'): ${step_title}"
 		if adb_file 'create_gzip'; then

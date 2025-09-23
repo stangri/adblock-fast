@@ -160,12 +160,12 @@ fi
 oldval="$(uci_get "$packageName" config debug)"
 if [ -n "$oldval" ]; then
 	uci_set "$packageName" config debug_init_script "$oldval"
-	uci_delete "$packageName" config debug
+	uci_remove "$packageName" config debug
 fi
 oldval="$(uci_get "$packageName" config proc_debug)"
 if [ -n "$oldval" ]; then
 	uci_set "$packageName" config debug_performance "$oldval"
-	uci_delete "$packageName" config proc_debug
+	uci_remove "$packageName" config proc_debug
 fi
 
 uci_changes "$packageName" && uci_commit "$packageName"
