@@ -8,8 +8,6 @@ START=20
 USE_PROCD=1
 LC_ALL=C
 
-[ -n "${IPKG_INSTROOT}" ] && return 0
-
 if type extra_command 1>/dev/null 2>&1; then
 	extra_command 'allow' 'Allows domain in current block-list and config'
 	extra_command 'check' 'Checks if specified domain is found in current block-list'
@@ -115,6 +113,16 @@ readonly canaryDomainsiCloud='mask.icloud.com mask-h2.icloud.com'
 readonly triggersReload='parallel_downloads debug download_timeout allowed_domain blocked_domain allowed_url blocked_url dns config_update_enabled config_update_url dnsmasq_config_file_url curl_additional_param curl_max_file_size curl_retry'
 readonly triggersRestart='compressed_cache compressed_cache_dir force_dns led force_dns_port'
 
+# Silence "Command failed: Not found" for redundant procd service delete calls
+__UBUS_BIN="$(command -v ubus || echo /bin/ubus)"
+ubus() {
+	if [ "$1" = "call" ] && [ "$2" = "service" ] && [ "$3" = "delete" ]; then
+		"$__UBUS_BIN" "$@" >/dev/null 2>&1 || true
+	else
+		"$__UBUS_BIN" "$@"
+	fi
+}
+
 dl_command=
 dl_flag=
 isSSLSupported=
@@ -174,11 +182,11 @@ smartdns_instance=
 verbosity=
 
 # shellcheck disable=SC1091
-. /lib/functions.sh
+. "${IPKG_INSTROOT}/lib/functions.sh"
 # shellcheck disable=SC1091
-. /lib/functions/network.sh
+. "${IPKG_INSTROOT}/lib/functions/network.sh"
 # shellcheck disable=SC1091
-. /usr/share/libubox/jshn.sh
+. "${IPKG_INSTROOT}/usr/share/libubox/jshn.sh"
 
 append_newline() { is_newline_ending "$1" || echo '' >> "$1"; }
 check_ipset() { { command -v ipset && /usr/sbin/ipset help hash:net; } >/dev/null 2>&1; }
@@ -2211,16 +2219,16 @@ service_triggers() {
 
 service_started() {
 	local start_time end_time elapsed step_title
-	if [ -n "$compressed_cache" ]; then
+	if [ -n "$compressed_cache" ] && ! adb_file 'test_gzip'; then
 		start_time=$(date +%s)
 		step_title="Creating ${dns} compressed cache"
 		output 1 "${step_title} "
 		output 2 "[PROC] ${step_title} "
 		json set message "$(get_text 'statusProcessing'): ${step_title}"
 		if adb_file 'create_gzip'; then
-			output_ok
+			output_okn
 		else
-			output_fail
+			output_failn
 			json add error 'errorCreatingCompressedCache'
 		fi
 		end_time=$(date +%s)
