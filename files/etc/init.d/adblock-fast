@@ -742,7 +742,8 @@ load_network() {
 		sleep 1
 	done
 	json add error 'errorNoWanGateway'
-	output_error "$(get_text 'errorNoWanGateway')"; return 1;
+	output_error "$(get_text 'errorNoWanGateway')"
+	return 1
 }
 
 detect_file_type() {
@@ -996,7 +997,6 @@ load_environment() {
 		if ! mkdir -p "${i%/*}"; then
 			if [ "$param" != 'quiet' ]; then
 				json add error 'errorOutputDirCreate' "$i"
-				output_error "$(get_text 'errorOutputDirCreate' "$i")"
 			fi
 		fi
 	done
@@ -1180,7 +1180,6 @@ resolver() {
 			if ! adb_file 'test'; then
 				json set status 'statusFail'
 				json add error 'errorOutputFileCreate' "$outputFile"
-				output_error "$(get_text 'errorOutputFileCreate' "$outputFile")"
 				return 1
 			fi
 			output 1 "Cycling $resolver_name "
@@ -1223,7 +1222,6 @@ resolver() {
 				output_fail
 				json set status 'statusFail'
 				json add error 'errorDNSReload'
-				output_error "$(get_text 'errorDNSReload')"
 				return 1
 			fi
 		;;
@@ -1282,7 +1280,6 @@ resolver() {
 			output_fail
 			json set status 'statusFail'
 			json add error 'errorNoHeartbeat'
-			output_error "$(get_text 'errorNoHeartbeat')"
 			return 1
 		;;
 		revert)
@@ -1299,7 +1296,6 @@ resolver() {
 				output_fail
 				json set status 'statusFail'
 				json add error 'errorDNSReload'
-				output_error "$(get_text 'errorDNSReload')"
 				return 1
 			fi
 		;;
@@ -1324,7 +1320,6 @@ resolver() {
 					else
 						json set status 'statusFail'
 						json add error 'errorNoOutputFile' "$outputFile"
-						output_error "$(get_text 'errorNoOutputFile' "$outputFile")"
 						return 1
 					fi
 				;;
@@ -1379,6 +1374,7 @@ adb_file() {
 			return $?
 		;;
 		create_gzip)
+			[ -s "$outputFile" ] || return 1
 			rm -f "$outputGzip" >/dev/null 2>/dev/null
 			R_TMP="$(mktemp -q -t "${packageName}_tmp.XXXXXXXX")"
 			if gzip < "$outputFile" > "$R_TMP"; then
@@ -1409,8 +1405,6 @@ adb_file() {
 process_file_url_wrapper() {
 	if [ "$2" != '0' ]; then
 		json add error 'errorConfigValidationFail'
-		output_error "$(get_text 'errorConfigValidationFail')"
-		output "Please check if the '$packageConfigFile' contains correct values for config options."
 	fi
 	if [ "$parallel_downloads" -gt 0 ]; then
 		process_file_url "$1" &
@@ -1557,7 +1551,6 @@ download_lists() {
 		config_foreach _config_calculate_sizes 'file_url'
 		if [ $((free_mem)) -lt $((total_sizes * 2)) ]; then
 			json add error 'errorTooLittleRam' "$free_mem"
-			output_error "$(get_text 'errorTooLittleRam' "$free_mem")"
 			return 1
 		else
 			return 0
@@ -1922,7 +1915,6 @@ start_service() {
 				output_okn
 			else
 				output_failn
-				json add error 'errorRestoreCompressedCache'
 				output_error "$(get_text 'errorRestoreCompressedCache')"
 				action='download'
 			fi
@@ -1938,7 +1930,6 @@ start_service() {
 				resolver 'on_start'
 			else
 				output_failn
-				json add error 'errorRestoreCache'
 				output_error "$(get_text 'errorRestoreCache')"
 				action='download'
 			fi
@@ -1949,7 +1940,6 @@ start_service() {
 		if [ -z "$blocked_url" ] && [ -z "$blocked_domain" ]; then
 			json set status 'statusFail'
 			json add error 'errorNothingToDo'
-			output_error "$(get_text 'errorNothingToDo')"
 		else
 			if ! adb_file 'test' || adb_file 'test_cache' || adb_file 'test_gzip'; then
 				output 1 "Force-reloading $serviceName...\n"
@@ -2219,7 +2209,7 @@ service_triggers() {
 
 service_started() {
 	local start_time end_time elapsed step_title
-	if [ -n "$compressed_cache" ] && ! adb_file 'test_gzip'; then
+	if [ -n "$compressed_cache" ] && ! adb_file 'test_gzip' && adb_file 'test'; then
 		start_time=$(date +%s)
 		step_title="Creating ${dns} compressed cache"
 		output 1 "${step_title} "
