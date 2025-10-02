@@ -809,8 +809,12 @@ load_package_config() {
 	[ "$debug_init_script" = '1' ]       || unset debug_init_script
 	[ "$debug_performance" = '1' ]       || unset debug_performance
 	[ "$enabled" = '1' ]                 || unset enabled
+	[ "$force_dns" = '1' ]               || unset force_dns
 	[ "$ipv6_enabled" = '1' ]            || unset ipv6_enabled
+	[ "$parallel_downloads" = '1' ]      || unset parallel_downloads
 	[ "$procd_trigger_wan6" = '1' ]      || unset procd_trigger_wan6
+	[ "$sanity_check" = '1' ]            || unset sanity_check
+	[ "$update_config_sizes" = '1' ]     || unset update_config_sizes
 
 	dns_set_output_values "$dns"
 	[ "$heartbeat_domain" = '-' ] && unset heartbeat_domain || heartbeat_domain="$(sanitize_domain "$heartbeat_domain")"
