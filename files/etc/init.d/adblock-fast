@@ -2535,7 +2535,7 @@ check_lists() {
 	return 0
 }
 
-dl() { rc_procd start_service 'download' && service_started 'on_boot'; }
+dl() { rc_procd start_service 'download' && service_started 'download'; }
 
 killcache() {
 	load_package_config
