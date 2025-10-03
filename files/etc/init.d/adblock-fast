@@ -1410,7 +1410,7 @@ process_file_url_wrapper() {
 	if [ "$2" != '0' ]; then
 		json add error 'errorConfigValidationFail'
 	fi
-	if [ "$parallel_downloads" -gt 0 ]; then
+	if [ -n "$parallel_downloads" ]; then
 		process_file_url "$1" &
 	else
 		process_file_url "$1"
