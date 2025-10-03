@@ -676,16 +676,16 @@ get_text() {
 		errorNoHeartbeat) printf "Heartbeat domain is not accessible after resolver restart";;
 
 		statusNoInstall) printf "The %s is not installed or not found" "$serviceName";;
-		statusStopped) printf "Stopped";;
-		statusStarting) printf "Starting";;
-		statusRestarting) printf "Restarting";;
-		statusForceReloading) printf "Force Reloading";;
-		statusDownloading) printf "Downloading";;
-		statusProcessing) printf "Processing";;
-		statusFail) printf "Failed to start";;
-		statusSuccess) printf "Success";;
-		statusTriggerBootWait) printf "Waiting for trigger (on_boot)";;
-		statusTriggerStartWait) printf "Waiting for trigger (on_start)";;
+		statusStopped) printf "stopped";;
+		statusStarting) printf "starting";;
+		statusRestarting) printf "restarting";;
+		statusForceReloading) printf "force-reloading";;
+		statusDownloading) printf "downloading";;
+		statusProcessing) printf "processing";;
+		statusFail) printf "failed to start";;
+		statusSuccess) printf "success";;
+		statusTriggerBootWait) printf "waiting for trigger (on_boot)";;
+		statusTriggerStartWait) printf "waiting for trigger (on_start)";;
 
 		warningExternalDnsmasqConfig)
 			printf "Use of external dnsmasq config file detected, please set 'dns' option to 'dnsmasq.conf'";;
@@ -2129,7 +2129,22 @@ status_service() {
 	else
 		[ -n "$status" ] && status="$(get_text "$status")"
 		status="${status}${status:+${message:+: $message}}"
-		[ -n "$status" ] && output "$serviceName $status!\n"
+		case "$(adb_file 'test_cache'; echo $?:$(adb_file 'test_gzip'; echo $?))" in
+			"0:0")
+				message="cache file and compressed cache file found"
+				;;
+			"0:1")
+				message="cache file found"
+				;;
+			"1:0")
+				message="compressed cache file found"
+				;;
+			*)
+				unset message
+				;;
+		esac
+		status="${status}${status:+${message:+ ($message)}}"
+	[ -n "$status" ] && output "$serviceName $status.\n"
 	fi
 	[ "$param" != 'quiet' ] || return 0
 	if [ -n "$error" ]; then
@@ -2520,7 +2535,7 @@ check_lists() {
 	return 0
 }
 
-dl() { rc_procd start_service 'download'; }
+dl() { rc_procd start_service 'download' && service_started 'on_boot'; }
 
 killcache() {
 	load_package_config
