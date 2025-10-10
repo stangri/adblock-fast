@@ -1839,6 +1839,7 @@ adb_config_update() {
 	load_dl_command
 	label="${config_update_url##*//}"
 	label="${label%%/*}";
+	[ -n "$enabled" ] || return 0
 	[ -n "$config_update_enabled" ] || return 0
 
 	if [ "$param" != 'download' ]; then
