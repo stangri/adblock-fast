@@ -2008,6 +2008,7 @@ start_service() {
 		json set status 'statusFail'
 		json add error 'errorOhSnap'
 		status_service 'on_start_failure'
+		resolver 'revert'
 	fi
 
 	adb_config_cache 'create'
