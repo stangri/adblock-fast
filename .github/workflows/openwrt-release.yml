@@ -34,7 +34,7 @@ jobs:
           #   target: mips_24kc
           # - version: openwrt-24.10
           #   target: mipsel_24kc
-          - version: snapshots
+          - version: openwrt-25.12
             target: x86_64
             suffix: noarch
           # - version: snapshots
