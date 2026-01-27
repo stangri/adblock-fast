@@ -24,7 +24,7 @@ fi
 
 readonly packageName='adblock-fast'
 readonly PKG_VERSION='dev-test'
-readonly packageCompat='10'
+readonly packageCompat='11'
 readonly serviceName="$packageName $PKG_VERSION"
 readonly packageMemoryThreshold='33554432'
 readonly packageConfigFile="/etc/config/${packageName}"
@@ -796,12 +796,13 @@ load_package_config() {
 	config_get_bool config_update_enabled    'config' 'config_update_enabled'   '0'
 	config_get_bool debug_init_script        'config' 'debug_init_script'       '0'
 	config_get_bool debug_performance        'config' 'debug_performance'       '0'
+	config_get_bool dnsmasq_sanity_check     'config' 'dnsmasq_sanity_check'    '1'
+	config_get_bool dnsmasq_validity_check   'config' 'dnsmasq_validity_check'  '0'
 	config_get_bool enabled                  'config' 'enabled'                 '0'
 	config_get_bool force_dns                'config' 'force_dns'               '1'
 	config_get_bool ipv6_enabled             'config' 'ipv6_enabled'            '0'
 	config_get_bool parallel_downloads       'config' 'parallel_downloads'      '1'
 	config_get_bool procd_trigger_wan6       'config' 'procd_trigger_wan6'      '0'
-	config_get_bool sanity_check             'config' 'sanity_check'            '1'
 	config_get_bool update_config_sizes      'config' 'update_config_sizes'     '1'
 	config_get      allowed_domain           'config' 'allowed_domain'
 	config_get      blocked_domain           'config' 'blocked_domain'
@@ -831,12 +832,13 @@ load_package_config() {
 	[ "$config_update_enabled" = '1' ]   || unset config_update_enabled
 	[ "$debug_init_script" = '1' ]       || unset debug_init_script
 	[ "$debug_performance" = '1' ]       || unset debug_performance
+	[ "$dnsmasq_sanity_check" = '1' ]    || unset dnsmasq_sanity_check
+	[ "$dnsmasq_validity_check" = '1' ]  || unset dnsmasq_validity_check
 	[ "$enabled" = '1' ]                 || unset enabled
 	[ "$force_dns" = '1' ]               || unset force_dns
 	[ "$ipv6_enabled" = '1' ]            || unset ipv6_enabled
 	[ "$parallel_downloads" = '1' ]      || unset parallel_downloads
 	[ "$procd_trigger_wan6" = '1' ]      || unset procd_trigger_wan6
-	[ "$sanity_check" = '1' ]            || unset sanity_check
 	[ "$update_config_sizes" = '1' ]     || unset update_config_sizes
 
 	dns_set_output_values "$dns"
@@ -1820,67 +1822,70 @@ download_lists() {
 	esac
 
 	# Validate and remove invalid domain entries (RFC 1123 compliant)
-	case "$dns" in
-		dnsmasq.conf|dnsmasq.ipset|dnsmasq.nftset|dnsmasq.servers|dnsmasq.addnhosts)
-			start_time=$(date +%s)
-			step_title='Validating domain entries'
-			output 2 "[PROC] ${step_title} "
-			json set message "$(get_text 'statusProcessing'): ${step_title}"
-			invalid_file="/tmp/${packageName}.invalid.tmp"
-			rm -f "$invalid_file"
-			# Fast validation: remove entries where domain:
-			# - starts with dash or dot (invalid per RFC)
-			# - is all numeric with dots (IP-like, invalid for domain)
-			# - has consecutive dots
-			# - ends with dash or dot (invalid per RFC)
-			sed "$outputParseFilter" "$outputFile" | \
-				grep -E '^-|^\.|^[0-9.]+$|\.\.|-$|\.$' > "$invalid_file" 2>/dev/null || true
-			if [ -s "$invalid_file" ]; then
-				invalid_count=$(wc -l < "$invalid_file" 2>/dev/null || echo 0)
-				if [ "$invalid_count" -gt 0 ]; then
-					# Create pattern file for grep -vFf (fastest removal method)
-					# Use appropriate prefix based on dns type
-					case "$dns" in
-						dnsmasq.conf)
-							sed "$dnsmasqConfGrepPattern" "$invalid_file" > "${invalid_file}.pat" 2>/dev/null
-						;;
-						dnsmasq.ipset)
-							sed "$dnsmasqIpsetGrepPattern" "$invalid_file" > "${invalid_file}.pat" 2>/dev/null
-						;;
-						dnsmasq.nftset)
-							sed "$dnsmasqNftsetGrepPattern" "$invalid_file" > "${invalid_file}.pat" 2>/dev/null
-						;;
-						dnsmasq.servers)
-							sed "$dnsmasqServersGrepPattern" "$invalid_file" > "${invalid_file}.pat" 2>/dev/null
-						;;
-						dnsmasq.addnhosts)
-							# Create patterns for both IPv4 and IPv6 formats
-							{ sed "$dnsmasqAddnhostsGrepPatternIPv4" "$invalid_file"; sed "$dnsmasqAddnhostsGrepPatternIPv6" "$invalid_file"; } > "${invalid_file}.pat" 2>/dev/null
-						;;
-					esac
-					# Remove invalid entries
-					grep -vFf "${invalid_file}.pat" "$outputFile" > "${outputFile}.valid" 2>/dev/null && \
-						mv "${outputFile}.valid" "$outputFile" 2>/dev/null
-					# Report (limit to first 20 for performance)
-					logger -t "$packageName" "Removed $invalid_count invalid entries from ${dns}."
-					json add warning 'warningInvalidDomainsRemoved' "$invalid_count"
-					rm -f "${invalid_file}.pat"
-				fi
+	if [ -n "$dnsmasq_validity_check" ]; then
+		case "$dns" in
+			dnsmasq.conf|dnsmasq.ipset|dnsmasq.nftset|dnsmasq.servers|dnsmasq.addnhosts)
+				start_time=$(date +%s)
+				step_title='Validating domain entries'
+				output 2 "[PROC] ${step_title} "
+				json set message "$(get_text 'statusProcessing'): ${step_title}"
+				invalid_file="/tmp/${packageName}.invalid.tmp"
 				rm -f "$invalid_file"
-			fi
-			if [ "${invalid_count:-0}" -gt 0 ]; then
-				output_warn
-			else
-				output_ok
-			fi
-			end_time=$(date +%s)
-			elapsed=$(( end_time - start_time ))
-			logger_debug "[PERF-DEBUG] ${step_title} took ${elapsed}s"
-		;;
-	esac
+				# Fast validation: remove entries where domain:
+				# - starts with dash or dot (invalid per RFC)
+				# - is all numeric with dots (IP-like, invalid for domain)
+				# - has consecutive dots
+				# - ends with dash or dot (invalid per RFC)
+				sed "$outputParseFilter" "$outputFile" | \
+					grep -E '^-|^\.|^[0-9.]+$|\.\.|-$|\.$' > "$invalid_file" 2>/dev/null || true
+				if [ -s "$invalid_file" ]; then
+					invalid_count=$(wc -l < "$invalid_file" 2>/dev/null || echo 0)
+					if [ "$invalid_count" -gt 0 ]; then
+						# Create pattern file for grep -vFf (fastest removal method)
+						# Use appropriate prefix based on dns type
+						case "$dns" in
+							dnsmasq.conf)
+								sed "$dnsmasqConfGrepPattern" "$invalid_file" > "${invalid_file}.pat" 2>/dev/null
+							;;
+							dnsmasq.ipset)
+								sed "$dnsmasqIpsetGrepPattern" "$invalid_file" > "${invalid_file}.pat" 2>/dev/null
+							;;
+							dnsmasq.nftset)
+								sed "$dnsmasqNftsetGrepPattern" "$invalid_file" > "${invalid_file}.pat" 2>/dev/null
+							;;
+							dnsmasq.servers)
+								sed "$dnsmasqServersGrepPattern" "$invalid_file" > "${invalid_file}.pat" 2>/dev/null
+							;;
+							dnsmasq.addnhosts)
+								# Create patterns for both IPv4 and IPv6 formats
+								{ sed "$dnsmasqAddnhostsGrepPatternIPv4" "$invalid_file"; sed "$dnsmasqAddnhostsGrepPatternIPv6" "$invalid_file"; } > "${invalid_file}.pat" 2>/dev/null
+							;;
+						esac
+						# Remove invalid entries
+						grep -vFf "${invalid_file}.pat" "$outputFile" > "${outputFile}.valid" 2>/dev/null && \
+							mv "${outputFile}.valid" "$outputFile" 2>/dev/null
+						# Report (limit to first 20 for performance)
+						logger -t "$packageName" "Removed $invalid_count invalid entries from ${dns}."
+						json add warning 'warningInvalidDomainsRemoved' "$invalid_count"
+						rm -f "${invalid_file}.pat"
+					fi
+					rm -f "$invalid_file"
+				fi
+				if [ "${invalid_count:-0}" -gt 0 ]; then
+					output_warn
+				else
+					output_ok
+				fi
+				end_time=$(date +%s)
+				elapsed=$(( end_time - start_time ))
+				logger_debug "[PERF-DEBUG] ${step_title} took ${elapsed}s"
+			;;
+		esac
+	fi
 
-	output 2 '[PROC] Removing temporary files '
-	json set message "$(get_text 'statusProcessing'): removing temporary files"
+	step_title='Removing temporary files'
+	output 2 "[PROC] ${step_title} "
+	json set message "$(get_text 'statusProcessing'): ${step_title}"
 	if rm -f "/tmp/${packageName}_tmp."* "$ALLOWED_TMP" "$A_TMP" "$B_TMP" "$SED_TMP" "$outputCache"; then
 		output_ok
 	else
@@ -2724,7 +2729,8 @@ load_validate_config() {
 		'smartdns_instance:list(or(integer, string)):*' \
 		'heartbeat_domain:or("-", string):heartbeat.melmac.ca' \
 		'heartbeat_sleep_timeout:range(1,60):10' \
-		'sanity_check:bool:1' \
+		'dnsmasq_sanity_check:bool:1' \
+		'dnsmasq_validity_check:bool:0' \
 		'update_config_sizes:bool:1' \
 		'allowed_domain:list(string)' \
 		'blocked_domain:list(string)' \
