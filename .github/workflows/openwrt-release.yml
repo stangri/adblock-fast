@@ -68,6 +68,18 @@ jobs:
             --exclude='.github' \
             ./ feed/${PKG_NAME}/
 
+      - name: ✅ Validate shell script syntax
+        run: |
+          echo "🔍 Checking shell script syntax..."
+          find feed/${PKG_NAME}/files/etc/init.d/ -type f -name '*' 2>/dev/null | while read -r script; do
+            if [ -f "$script" ]; then
+              echo "Checking syntax of: $script"
+              bash -n "$script" || { echo "❌ Syntax error in $script"; exit 1; }
+              echo "✅ $script syntax OK"
+            fi
+          done
+          echo "✅ All shell scripts passed syntax validation"
+
       - name: 🧮 Compute ARCH
         run: |
           if [ "${{ matrix.version }}" = "snapshots" ]; then
