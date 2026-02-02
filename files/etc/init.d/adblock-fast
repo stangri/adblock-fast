@@ -1301,7 +1301,7 @@ resolver() {
 			json set message "Testing resolver on $heartbeat_domain"
 			local i=0
 			while [ "$i" -lt "$heartbeat_sleep_timeout" ]; do
-				if nslookup "$heartbeat_domain" >/dev/null 2>&1; then
+				if resolveip "$heartbeat_domain" >/dev/null 2>&1; then
 					output_ok
 					return 0
 				fi

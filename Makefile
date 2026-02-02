@@ -20,6 +20,7 @@ define Package/adblock-fast
   DEPENDS:= \
 	+jshn \
 	+curl \
+	+resolveip \
 	+!BUSYBOX_DEFAULT_AWK:gawk \
 	+!BUSYBOX_DEFAULT_GREP:grep \
 	+!BUSYBOX_DEFAULT_SED:sed \
