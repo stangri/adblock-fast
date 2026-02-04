@@ -68,19 +68,19 @@ readonly smartdnsDomainSetFile="/var/run/${packageName}/smartdns.domainset"
 readonly smartdnsDomainSetCache="/var/run/${packageName}/smartdns.domainset.cache"
 readonly smartdnsDomainSetConfig="/var/run/${packageName}/smartdns.domainset.conf"
 readonly smartdnsDomainSetGzip="${packageName}.smartdns.domainset.gz"
-readonly smartdnsDomainSetFilter=''
+readonly smartdnsDomainSetOutputFormatFilter=''
 readonly smartdnsDomainSetOutputParseFilter=''
 readonly smartdnsIpsetFile="/var/run/${packageName}/smartdns.ipset"
 readonly smartdnsIpsetCache="/var/run/${packageName}/smartdns.ipset.cache"
 readonly smartdnsIpsetConfig="/var/run/${packageName}/smartdns.ipset.conf"
 readonly smartdnsIpsetGzip="${packageName}.smartdns.ipset.gz"
-readonly smartdnsIpsetFilter=''
+readonly smartdnsIpsetOutputFormatFilter=''
 readonly smartdnsIpsetOutputParseFilter=''
 readonly smartdnsNftsetFile="/var/run/${packageName}/smartdns.nftset"
 readonly smartdnsNftsetCache="/var/run/${packageName}/smartdns.nftset.cache"
 readonly smartdnsNftsetConfig="/var/run/${packageName}/smartdns.nftset.conf"
 readonly smartdnsNftsetGzip="${packageName}.smartdns.nftset.gz"
-readonly smartdnsNftsetFilter=''
+readonly smartdnsNftsetOutputFormatFilter=''
 readonly smartdnsNftsetOutputParseFilter=''
 readonly unboundFile="/var/lib/unbound/adb_list.${packageName}"
 readonly unboundCache="/var/run/${packageName}/unbound.cache"
@@ -336,7 +336,7 @@ dns_set_output_values() {
 			outputGzip="${compressed_cache_dir}/${dnsmasqAddnhostsGzip}"
 			outputParseFilter="$dnsmasqAddnhostsOutputParseFilter"
 			if [ -n "$ipv6_enabled" ]; then
-				outputFilterIPv6="$dnsmasqAddnhostsFilterIPv6"
+				outputFilterIPv6="$dnsmasqAddnhostsOutputFormatFilterIPv6"
 			fi
 		;;
 		dnsmasq.conf)
@@ -355,9 +355,9 @@ dns_set_output_values() {
 		;;
 		dnsmasq.nftset)
 			if [ -n "$ipv6_enabled" ]; then
-				outputFilter="$dnsmasqNftsetFilterIPv6"
+				outputFilter="$dnsmasqNftsetOutputFormatFilterIPv6"
 			else
-				outputFilter="$dnsmasqNftsetFilter"
+				outputFilter="$dnsmasqNftsetOutputFormatFilter"
 			fi
 			outputFile="$dnsmasqNftsetFile"
 			outputCache="$dnsmasqNftsetCache"
@@ -365,7 +365,7 @@ dns_set_output_values() {
 			outputParseFilter="$dnsmasqNftsetOutputParseFilter"
 		;;
 		dnsmasq.servers)
-			outputFilter="$dnsmasqServersFilter"
+			outputFilter="$dnsmasqServersOutputFormatFilter"
 			outputFile="$dnsmasqServersFile"
 			outputCache="$dnsmasqServersCache"
 			outputGzip="${compressed_cache_dir}/${dnsmasqServersGzip}"
@@ -374,7 +374,7 @@ dns_set_output_values() {
 			outputBlockedCountFilter="$dnsmasqServersBlockedCountFilter"
 		;;
 		smartdns.domainset)
-			outputFilter="$smartdnsDomainSetFilter"
+			outputFilter="$smartdnsDomainSetOutputFormatFilter"
 			outputFile="$smartdnsDomainSetFile"
 			outputCache="$smartdnsDomainSetCache"
 			outputGzip="${compressed_cache_dir}/${smartdnsDomainSetGzip}"
@@ -382,7 +382,7 @@ dns_set_output_values() {
 			outputParseFilter="$smartdnsDomainSetOutputParseFilter"
 		;;
 		smartdns.ipset)
-			outputFilter="$smartdnsIpsetFilter"
+			outputFilter="$smartdnsIpsetOutputFormatFilter"
 			outputFile="$smartdnsIpsetFile"
 			outputCache="$smartdnsIpsetCache"
 			outputGzip="${compressed_cache_dir}/${smartdnsIpsetGzip}"
@@ -390,7 +390,7 @@ dns_set_output_values() {
 			outputParseFilter="$smartdnsIpsetOutputParseFilter"
 		;;
 		smartdns.nftset)
-			outputFilter="$smartdnsNftsetFilter"
+			outputFilter="$smartdnsNftsetOutputFormatFilter"
 			outputFile="$smartdnsNftsetFile"
 			outputCache="$smartdnsNftsetCache"
 			outputGzip="${compressed_cache_dir}/${smartdnsNftsetGzip}"
