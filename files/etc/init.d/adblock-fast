@@ -433,8 +433,8 @@ is_fw4_restart_needed() {
 	fi
 }
 is_integer() { case "$1" in ''|*[!0-9]*) return 1;; esac; [ "$1" -ge 1 ] && [ "$1" -le 65535 ] || return 1; return 0; }
-is_greater() { test "$(printf '%s\n' "$@" | sort -V | head -n 1)" != "$1"; }
-is_greater_or_equal() { test "$(printf '%s\n' "$@" | sort -V | head -n 1)" = "$2"; }
+is_greater() { test "$(printf '%s\n' "$@" | sort -V 2>/dev/null | head -n 1)" != "$1"; }
+is_greater_or_equal() { test "$(printf '%s\n' "$@" | sort -V 2>/dev/null | head -n 1)" = "$2"; }
 # shellcheck disable=SC3057
 is_https_url() { [ "${1:0:8}" = "https://" ]; }
 is_newline_ending() { [ "$(tail -c1 "$1" | wc -l)" -ne '0' ]; }
@@ -787,7 +787,7 @@ detect_file_type() {
 		echo 'dnsmasq3'
 	elif grep -q -e '^0\.0\.0\.0\s' -e '^127\.0\.0\.1\s' "$file"; then
 		echo 'hosts'
-	elif [ -n "$(sed "$domainsFilter" "$file" | head -1)" ]; then
+	elif [ -n "$(sed "$domainsFilter" "$file" 2>/dev/null | head -1)" ]; then
 		echo 'domains'
 	fi
 }

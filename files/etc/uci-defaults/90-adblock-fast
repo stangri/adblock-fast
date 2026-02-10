@@ -126,7 +126,7 @@ if [ -s '/etc/config/simple-adblock' ] \
 fi
 
 # Transition to list names
-_find_name() { grep -B1 "$1" "/etc/config/${packageName}-opkg" | head -1 | cut -d "'" -f2; }
+_find_name() { grep -B1 "$1" "/etc/config/${packageName}-opkg" 2>/dev/null | head -1 | cut -d "'" -f2; }
 
 add_name() {
 	local cfg="$1"
