@@ -15,7 +15,7 @@ define Package/adblock-fast
   SECTION:=net
   CATEGORY:=Network
   TITLE:=AdBlock Fast Service
-  URL:=https://github.com/stangri/adblock-fast/
+  URL:=https://github.com/mossdef-org/adblock-fast/
   PKGARCH:=all
   DEPENDS:= \
 	+jshn \
