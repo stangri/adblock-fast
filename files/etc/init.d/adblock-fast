@@ -1067,12 +1067,10 @@ load_environment() {
 
 resolver() {
 	_dnsmasq_instance_get_confdir() {
-		local cfg_file
-		local instance_name
-
-		instance_name=$(uci -q show "dhcp.${1}" | awk -F'[.=]' 'NR==1{print $2}')
+		local cfg cfg_file
+		cfg="$(uci -q show "dhcp.${1}" | awk -F'[.=]' 'NR==1{print $2}')"
 		[ -z "$dnsmasq_ubus" ] && dnsmasq_ubus="$(ubus call service list '{"name":"dnsmasq"}')"
-		cfg_file="$(echo "$dnsmasq_ubus" | jsonfilter -e "@.dnsmasq.instances.${instance_name}.command" \
+		cfg_file="$(echo "$dnsmasq_ubus" | jsonfilter -e "@.dnsmasq.instances.${cfg}.command" \
 			| awk '{gsub(/\\\//,"/");gsub(/[][",]/,"");for(i=1;i<=NF;i++)if($i=="-C"){print $(i+1);exit}}')"
 		awk -F= '/^conf-dir=/{print $2; exit}' "$cfg_file"
 	}
