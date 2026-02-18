@@ -1,14 +1,14 @@
 // UCI mock for adblock-fast tests.
 // Based on mwan4's UCI mock, extended with set/save/commit/changes/delete.
 
-let mocklib = global.mocklib;
+let mocklib = global.mocklib; // ucode-lsp disable
 
-let byte = (str, off) => {
+let byte = (str, off) => { // ucode-lsp disable
 	let v = ord(str, off);
 	return length(v) ? v[0] : v;
 };
 
-let hash = (s) => {
+let hash = (s) => { // ucode-lsp disable
 	let h = 7;
 
 	for (let i = 0; i < length(s); i++)
@@ -17,7 +17,7 @@ let hash = (s) => {
 	return h;
 };
 
-let id = (config, t, n) => {
+let id = (config, t, n) => { // ucode-lsp disable
 	while (true) {
 		let id = sprintf('cfg%08x', hash(t + n));
 
@@ -28,7 +28,7 @@ let id = (config, t, n) => {
 	}
 };
 
-let fixup_config = (config) => {
+let fixup_config = (config) => { // ucode-lsp disable
 	let rv = {};
 	let n_section = 0;
 

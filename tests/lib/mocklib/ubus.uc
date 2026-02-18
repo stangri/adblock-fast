@@ -1,7 +1,7 @@
 // UBus mock for adblock-fast tests.
 // Reused from mwan4's mock with no changes.
 
-let mocklib = global.mocklib;
+let mocklib = global.mocklib; // ucode-lsp disable
 
 return {
 	connect: function() {
