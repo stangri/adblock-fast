@@ -136,7 +136,7 @@ const list_formats = {
 		filter: "/localhost/d;/^#/d;/^[^0-9]/d;s/^0\\.0\\.0\\.0.//;s/^127\\.0\\.0\\.1.//;s/[[:space:]]*#.*$//;s/[[:cntrl:]]$//;s/[[:space:]]//g;/[`~!@#\\$%\\^&\\*()=+;:\"',<>?/\\|[{}]/d;/]/d;/\\./!d;/^$/d;/[^[:alnum:]_.-]/d;",
 	},
 	domains: {
-		filter: "/^#/d;s/[[:space:]]*#.*|[[:space:]]*$|[[:cntrl:]]$//g;/^[[:space:]]*$/d;/^-|^\\.|\\.\\.|-$|\\.$|^[0-9.]+$|^[^[:alnum:]]|[`~!@#\\$%\\^&\\*()=+;:\"',<>?/\\|{}]/d;/\\./!d",
+		filter: "/^#/d;s/[[:space:]]*#.*//;s/[[:space:]]*$//;s/[[:cntrl:]]$//;/^[[:space:]]*$/d;/[[:space:]]/d;/^-/d;/^\\./d;/\\.\\./d;/-$/d;/\\.$/d;/^[0-9.]*$/d;/^[^[:alnum:]]/d;/[`~!@#\\$%\\^&\\*()=+;:\"',<>?/\\|{}]/d;/\\./!d",
 	},
 };
 
@@ -158,29 +158,29 @@ const canary = {
 
 let state = {
 	script_name: pkg.name,
-	dl_command: null,
-	dl_flag: null,
+	dl_command: '',
+	dl_flag: '',
 	ssl_supported: false,
 	environment_loaded: false,
 	config_loaded: false,
 	fw4_restart: false,
-	dnsmasq_features: null,
+	dnsmasq_features: '',
 	dnsmasq_ubus: null,
 	awk_cmd: 'awk',
 	output_queue: '',
-	is_tty: null,
+	is_tty: false,
 };
 
 let dns_output = {
-	allow_filter: null,
-	blocked_count_filter: null,
-	filter: null,
-	filter_ipv6: null,
-	file: null,
-	gzip: null,
-	cache: null,
-	config: null,
-	parse_filter: null,
+	allow_filter: '',
+	blocked_count_filter: '',
+	filter: '',
+	filter_ipv6: '',
+	file: '',
+	gzip: '',
+	cache: '',
+	config: '',
+	parse_filter: '',
 };
 
 // Config values loaded by load()
@@ -395,8 +395,6 @@ let _write = function(level, ...args) {
 	if (level != null && (cfg.verbosity & level) == 0) return;
 
 	// Print to stderr (terminal)
-	if (state.is_tty == null)
-		state.is_tty = (system('[ -t 2 ]') == 0);
 	if (state.is_tty)
 		warn(replace(msg, /\\n/g, '\n'));
 
@@ -683,10 +681,10 @@ function dns_set_output_values(d) {
 	dns_output.cache = dc.cache;
 	dns_output.gzip = cfg.compressed_cache_dir + '/' + dc.gzip;
 	dns_output.parse_filter = dc.parse_filter;
-	dns_output.config = dc.config || null;
-	dns_output.allow_filter = dc.allow_filter || null;
-	dns_output.blocked_count_filter = dc.blocked_count_filter || null;
-	dns_output.filter_ipv6 = null;
+	dns_output.config = dc.config || '';
+	dns_output.allow_filter = dc.allow_filter || '';
+	dns_output.blocked_count_filter = dc.blocked_count_filter || '';
+	dns_output.filter_ipv6 = '';
 	if (d == 'dnsmasq.nftset' && cfg.ipv6_enabled && dc.format_filter_ipv6)
 		dns_output.filter = dc.format_filter_ipv6;
 	else
@@ -829,6 +827,7 @@ function parse_options(raw, schema) {
 
 function load() {
 	if (state.config_loaded) return;
+	state.is_tty = system('[ -t 2 ]') == 0 ? true : false;
 	let raw = uci(pkg.name, true).get_all(pkg.name, 'config') || {};
 	cfg = parse_options(raw, config_schema);
 	dns_set_output_values(cfg.dns);
@@ -1341,7 +1340,7 @@ function _get_smartdns_instances() {
 }
 
 function resolver(action) {
-	let resolver_name = split(cfg.dns || '', '.')[0];
+	let resolver_name = split(cfg.dns, '.')[0];
 	if (!action) return true;
 
 	switch (action) {
@@ -1978,10 +1977,10 @@ function _build_procd_data() {
 	// Firewall rules
 	result.firewall = [];
 	if (cfg.force_dns) {
-		let ports = split(replace('' + (cfg.force_dns_port || ''), /,/g, ' '), /\s+/);
+		let ports = split(replace('' + cfg.force_dns_port, /,/g, ' '), /\s+/);
 		for (let p in ports) {
 			if (!p) continue;
-			let ifaces = split('' + (cfg.force_dns_interface || ''), /\s+/);
+			let ifaces = split('' + cfg.force_dns_interface, /\s+/);
 			if (is_port_listening(p)) {
 				for (let iface in ifaces) {
 					if (!iface) continue;
@@ -2008,7 +2007,7 @@ function _build_procd_data() {
 	case 'dnsmasq.ipset':
 	case 'smartdns.ipset':
 		push(result.firewall, { type: 'ipset', name: 'adb', match: 'dest_net', storage: 'hash' });
-		for (let iface in split('' + (cfg.force_dns_interface || ''), /\s+/)) {
+		for (let iface in split('' + (cfg.force_dns_interface), /\s+/)) {
 			if (!iface) continue;
 			push(result.firewall, { type: 'rule', ipset: 'adb', src: iface, dest: '*', proto: 'tcp udp', target: 'REJECT' });
 		}
@@ -2016,13 +2015,13 @@ function _build_procd_data() {
 	case 'dnsmasq.nftset':
 	case 'smartdns.nftset':
 		push(result.firewall, { type: 'ipset', name: 'adb4', family: '4', match: 'dest_net' });
-		for (let iface in split('' + (cfg.force_dns_interface || ''), /\s+/)) {
+		for (let iface in split('' + (cfg.force_dns_interface), /\s+/)) {
 			if (!iface) continue;
 			push(result.firewall, { type: 'rule', ipset: 'adb4', src: iface, dest: '*', proto: 'tcp udp', target: 'REJECT' });
 		}
 		if (cfg.ipv6_enabled) {
 			push(result.firewall, { type: 'ipset', name: 'adb6', family: '6', match: 'dest_net' });
-			for (let iface in split('' + (cfg.force_dns_interface || ''), /\s+/)) {
+			for (let iface in split('' + (cfg.force_dns_interface), /\s+/)) {
 				if (!iface) continue;
 				push(result.firewall, { type: 'rule', ipset: 'adb6', src: iface, dest: '*', proto: 'tcp udp', target: 'REJECT' });
 			}
@@ -2304,7 +2303,7 @@ function allow(string) {
 		return;
 	}
 
-	let resolver_name = split(cfg.dns || '', '.')[0];
+	let resolver_name = split(cfg.dns, '.')[0];
 	output.info('Allowing domains and restarting ' + resolver_name + ' ');
 	output.verbose('[PROC] Allowing domains \\n');
 
@@ -2419,7 +2418,7 @@ function check_leading_dot() {
 		return;
 	}
 	let search_string = '';
-	switch (split(cfg.dns || '', '.')[0]) {
+	switch (split(cfg.dns, '.')[0]) {
 	case 'dnsmasq': search_string = '/\\.'; break;
 	case 'smartdns': search_string = '^\\.'; break;
 	case 'unbound': search_string = '"\\.'; break;
@@ -2623,9 +2622,9 @@ function get_init_status(name) {
 		message: message || '',
 		stats: stats || '',
 		entries: int(count_blocked_domains()),
-		dns: cfg.dns || '',
-		outputFile: dns_output.file || '',
-		outputCache: dns_output.cache || '',
+		dns: cfg.dns,
+		outputFile: dns_output.file,
+		outputCache: dns_output.cache,
 		outputGzip: gzip_path,
 		outputFileExists: (stat(dns_output.file)?.size > 0) || false,
 		outputCacheExists: (stat(dns_output.cache)?.size > 0) || false,

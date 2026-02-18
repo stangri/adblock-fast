@@ -6,12 +6,49 @@ on:
   push:
     branches:
       - main
+  pull_request:
   workflow_dispatch:
 
 jobs:
+  test:
+    name: Functional tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install ucode build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake pkg-config libjson-c-dev
+
+      - name: Build and install ucode
+        run: |
+          git clone --depth 1 https://github.com/jow-/ucode.git /tmp/ucode
+          cmake -S /tmp/ucode -B /tmp/ucode/build \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DFS_SUPPORT=ON \
+            -DUCI_SUPPORT=OFF \
+            -DUBUS_SUPPORT=OFF \
+            -DULOOP_SUPPORT=OFF \
+            -DNLS_SUPPORT=OFF \
+            -DRTNL_SUPPORT=OFF
+          cmake --build /tmp/ucode/build -j$(nproc)
+          sudo cmake --install /tmp/ucode/build
+          sudo ldconfig
+
+      - name: Verify ucode
+        run: ucode -e 'import { readfile } from "fs"; print("ucode ok\n");'
+
+      - name: Run functional tests
+        run: bash tests/run_tests.sh
+
   build:
     name: Build for ${{ matrix.version }} / ${{ matrix.target }}
+    needs: test
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     env:
       REPO_APK_KEY: ${{ secrets.REPO_APK_KEY }}
 
@@ -51,13 +88,13 @@ jobs:
           #   target: mipsel_24kc
 
     steps:
-      - name: 🧾 Checkout repo
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: 📛 Set PKG_NAME from repo
+      - name: Set PKG_NAME from repo
         run: echo "PKG_NAME=${{ github.event.repository.name }}" >> "$GITHUB_ENV"
 
-      - name: 🧰 Set up melmac feed structure
+      - name: Set up melmac feed structure
         run: |
           # Create a proper OpenWrt feed layout where each package lives in its own subdir
           mkdir -p feed/${PKG_NAME}
@@ -68,19 +105,19 @@ jobs:
             --exclude='.github' \
             ./ feed/${PKG_NAME}/
 
-      - name: ✅ Validate shell script syntax
+      - name: Validate shell script syntax
         run: |
-          echo "🔍 Checking shell script syntax..."
+          echo "Checking shell script syntax..."
           find feed/${PKG_NAME}/files/etc/init.d/ -type f -name '*' 2>/dev/null | while read -r script; do
             if [ -f "$script" ]; then
               echo "Checking syntax of: $script"
-              bash -n "$script" || { echo "❌ Syntax error in $script"; exit 1; }
-              echo "✅ $script syntax OK"
+              bash -n "$script" || { echo "Syntax error in $script"; exit 1; }
+              echo "$script syntax OK"
             fi
           done
-          echo "✅ All shell scripts passed syntax validation"
+          echo "All shell scripts passed syntax validation"
 
-      - name: 🧮 Compute ARCH
+      - name: Compute ARCH
         run: |
           if [ "${{ matrix.version }}" = "snapshots" ]; then
             echo "ARCH=${{ matrix.target }}-SNAPSHOT" >> "$GITHUB_ENV"
@@ -88,7 +125,7 @@ jobs:
             echo "ARCH=${{ matrix.target }}-${{ matrix.version }}" >> "$GITHUB_ENV"
           fi
 
-      - name: 🏗️ Build with OpenWrt SDK
+      - name: Build with OpenWrt SDK
         uses: openwrt/gh-action-sdk@v8
         env:
           ARCH: ${{ env.ARCH }}
@@ -100,20 +137,7 @@ jobs:
           NO_REFRESH_CHECK: 1
           PRIVATE_KEY: ${{ secrets.REPO_APK_KEY }}
 
-      #      - name: 🔍 Debug build output
-      #        run: |
-      #          echo "=== Build directory structure ==="
-      #          find . -name "*.ipk" -type f 2>/dev/null || echo "No .ipk files found"
-      #          echo "=== bin directory structure ==="
-      #          ls -la bin/ 2>/dev/null || echo "No bin directory found"
-      #          if [ -d "bin/packages" ]; then
-      #            echo "=== packages directory structure ==="
-      #            find bin/packages/ -type f -name "*.ipk" 2>/dev/null || echo "No .ipk files in packages directory"
-      #            echo "=== Full packages directory tree ==="
-      #            ls -laR bin/packages/ 2>/dev/null || echo "No packages directory"
-      #          fi
-
-      - name: 🏷️ Rename APK with version and target
+      - name: Rename APK with version and target
         run: |
           set -euo pipefail
           PKG_VERSION=$(grep -E '^PKG_VERSION *:?=' Makefile | head -n1 | cut -d= -f2 | tr -d '[:space:]')
@@ -129,16 +153,13 @@ jobs:
             done
           done
 
-      - name: 📦 Upload artifact for ${{ matrix.target }}
+      - name: Upload artifact for ${{ matrix.target }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.PKG_NAME }}-${{ matrix.target }}-${{ matrix.version }}
           path: |
             bin/packages/*/melmac/${{ env.PKG_NAME }}*.ipk
             bin/packages/*/melmac/${{ env.PKG_NAME }}*.apk
-          #            bin/packages/*/melmac/Packages*
-          #            bin/packages/*/melmac/index.json
-          #            bin/packages/*/melmac/packages.adb
           if-no-files-found: ignore
 
   release:
@@ -147,24 +168,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 🧾 Checkout repo
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: 🔍 Extract version and release from Makefile
+      - name: Extract version and release from Makefile
         id: version
         run: |
           PKG_VERSION=$(grep -E '^PKG_VERSION *:?=' Makefile | head -n1 | cut -d= -f2 | tr -d '[:space:]')
           PKG_RELEASE=$(grep -E '^PKG_RELEASE *:?=' Makefile | head -n1 | cut -d= -f2 | tr -d '[:space:]')
           COMBINED_VERSION="${PKG_VERSION}-${PKG_RELEASE}"
-          echo "📦 Version: $COMBINED_VERSION"
+          echo "Version: $COMBINED_VERSION"
           echo "version=$COMBINED_VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: ⬇️ Download all build artifacts
+      - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./release-assets
 
-      - name: 🗃️ Create GitHub Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
