@@ -5,7 +5,7 @@
 // Main ucode module for adblock-fast.
 // All business logic lives here; the init script is a thin procd wrapper.
 
-import { readfile, writefile, popen, stat, unlink, rename, open, glob, mkdir, mkstemp, symlink, chmod, chown, realpath, lsdir, access } from 'fs';
+import { readfile, writefile, popen, stat, unlink, rename, open, glob, mkdir, mkstemp, symlink, chmod, chown, realpath, lsdir, access, dirname } from 'fs';
 import { cursor } from 'uci';
 import { connect } from 'ubus';
 
@@ -214,7 +214,7 @@ function ensure_trailing_newline(file) {
 
 function mkdir_p(path) {
 	if (!path || stat(path)?.type == 'directory') return true;
-	let parent = replace(path, /\/[^\/]+\/?$/, '');
+	let parent = dirname(path);
 	if (parent && parent != path) mkdir_p(parent);
 	return mkdir(path) != null;
 }
@@ -255,6 +255,95 @@ function str_contains_word(haystack, needle) {
 	if (!haystack || !needle) return false;
 	return index(split('' + haystack, /\s+/), needle) >= 0;
 }
+
+// ── Shell Command Wrappers ──────────────────────────────────────────
+
+function sed_filter(expr, input, output) {
+	return system(sprintf('sed %s %s > %s',
+		shell_quote(expr), shell_quote(input), shell_quote(output))) == 0;
+}
+
+function sed_inplace(expr, file) {
+	return system(sprintf('sed -i %s %s',
+		shell_quote(expr), shell_quote(file))) == 0;
+}
+
+function sed_script(script, input, output) {
+	return system(sprintf('sed -E -f %s %s > %s',
+		shell_quote(script), shell_quote(input), shell_quote(output))) == 0;
+}
+
+function sort_file(input, output, unique) {
+	return system(sprintf('sort %s%s > %s',
+		unique ? '-u ' : '', shell_quote(input), shell_quote(output))) == 0;
+}
+
+function gzip_test(file) {
+	return system(sprintf('gzip -t -c %s >/dev/null 2>/dev/null',
+		shell_quote(file))) == 0;
+}
+
+function gzip_compress(input, output) {
+	return system(sprintf('gzip < %s > %s',
+		shell_quote(input), shell_quote(output))) == 0;
+}
+
+function gzip_decompress(input, output) {
+	return system(sprintf('gzip -dc < %s > %s',
+		shell_quote(input), shell_quote(output))) == 0;
+}
+
+function grep_test(pattern, file, flags) {
+	return cmd_rc(sprintf('grep %s %s %s',
+		flags || '-q', shell_quote(pattern), shell_quote(file))) == 0;
+}
+
+function grep_count(pattern, file, flags) {
+	return int(trim(cmd_output(sprintf('grep %s %s %s',
+		flags || '-c', shell_quote(pattern), shell_quote(file)))) || '0');
+}
+
+function grep_output(pattern, file, flags) {
+	return cmd_output(sprintf('grep %s %s %s',
+		flags || '', shell_quote(pattern), shell_quote(file)));
+}
+
+function grep_exclude_file(patfile, input, output) {
+	return system(sprintf('grep -vFf %s %s > %s 2>/dev/null',
+		shell_quote(patfile), shell_quote(input), shell_quote(output))) == 0;
+}
+
+function count_lines(file, filter_expr) {
+	if (filter_expr)
+		return int(trim(cmd_output(sprintf('sed %s %s | wc -l',
+			shell_quote(filter_expr), shell_quote(file)))) || '0');
+	return int(trim(cmd_output('wc -l < ' + shell_quote(file))) || '0');
+}
+
+function awk_reverse_labels(input, output) {
+	return system(sprintf("%s -F '.' '{for(i=NF;i>0;i--) printf \"%%s%%s\", $i, (i>1?\".\":\"\\n\")}' %s > %s",
+		state.awk_cmd, shell_quote(input), shell_quote(output))) == 0;
+}
+
+function awk_dedup_subdomains(input, output) {
+	return system(sprintf("%s 'NR==1{prev=$0;print;next}{len=length(prev);if(substr($0,1,len)==prev && substr($0,len+1,1)==\".\") next;print;prev=$0}' %s > %s",
+		state.awk_cmd, shell_quote(input), shell_quote(output))) == 0;
+}
+
+function download(url, dest) {
+	return system(sprintf('%s %s %s %s 2>/dev/null',
+		state.dl_command, shell_quote(url), state.dl_flag, shell_quote(dest))) == 0;
+}
+
+function service_restart(name) {
+	return system(sprintf('/etc/init.d/%s restart >/dev/null 2>&1', name)) == 0;
+}
+
+function service_enabled(name) {
+	return system(sprintf('/etc/init.d/%s enabled >/dev/null 2>&1', name)) == 0;
+}
+
+// ── Memory / System Info ────────────────────────────────────────────
 
 function get_mem_available() {
 	let conn = connect();
@@ -370,12 +459,8 @@ function uci_list_add_if_new(config, section, option, value) {
 	if (!config || !section || !option || !value) return false;
 	let ctx = uci(config);
 	let current = ctx.get(config, section, option);
-	if (type(current) == 'array') {
-		for (let v in current)
-			if (v == value) return true;
-	} else if (current == value) {
-		return true;
-	}
+	if (type(current) == 'array' && index(current, value) >= 0) return true;
+	if (current == value) return true;
 	ctx.list_append(config, section, option, value);
 	ctx.save(config);
 	return true;
@@ -419,7 +504,7 @@ function status_json(action) {
 				warnings: status_data.warnings,
 			}
 		};
-		let dir = replace(pkg.status_file, /\/[^\/]+$/, '');
+		let dir = dirname(pkg.status_file);
 		mkdir_p(dir);
 		let tmp_path = pkg.status_file + '.tmp';
 		writefile(tmp_path, sprintf('%J', dump_obj) + '\n');
@@ -510,8 +595,9 @@ function check_nft() { return is_present('nft'); }
 
 function check_dnsmasq_feature(feat) {
 	if (!state.dnsmasq_features) {
-		let raw = cmd_output("dnsmasq --version | grep -m1 'Compile time options:' | cut -d: -f2");
-		state.dnsmasq_features = (raw || '') + ' ';
+		let raw = cmd_output('dnsmasq --version');
+		let m = match(raw, /Compile time options:(.+)/);
+		state.dnsmasq_features = (m ? m[1] : '') + ' ';
 	}
 	switch (feat) {
 	case 'idn': return index('' + state.dnsmasq_features, ' IDN ') >= 0;
@@ -529,12 +615,24 @@ function check_dnsmasq_nftset() { return check_nft() && check_dnsmasq_feature('n
 function is_port_listening(port) {
 	if (!is_integer(port)) return false;
 	let port_hex = sprintf('%04X', int(port));
-	// Check TCP
-	if (cmd_rc(sprintf("awk -v h='%s' 'NR>1{split($2,a,\":\"); if (toupper(a[2])==h && $4==\"0A\") {found=1}} END{exit found?0:1}' /proc/net/tcp /proc/net/tcp6 2>/dev/null", port_hex)) == 0)
-		return true;
-	// Check UDP
-	if (cmd_rc(sprintf("awk -v h='%s' 'NR>1{split($2,a,\":\"); if (toupper(a[2])==h) {found=1}} END{exit found?0:1}' /proc/net/udp /proc/net/udp6 2>/dev/null", port_hex)) == 0)
-		return true;
+	for (let path in ['/proc/net/tcp', '/proc/net/tcp6']) {
+		let lines = split(readfile(path) || '', '\n');
+		for (let i = 1; i < length(lines); i++) {
+			let fields = split(trim(lines[i]), /\s+/);
+			if (length(fields) < 4) continue;
+			if (uc(split(fields[1], ':')[1]) == port_hex && fields[3] == '0A')
+				return true;
+		}
+	}
+	for (let path in ['/proc/net/udp', '/proc/net/udp6']) {
+		let lines = split(readfile(path) || '', '\n');
+		for (let i = 1; i < length(lines); i++) {
+			let fields = split(trim(lines[i]), /\s+/);
+			if (length(fields) < 2) continue;
+			if (uc(split(fields[1], ':')[1]) == port_hex)
+				return true;
+		}
+	}
 	return false;
 }
 
@@ -571,10 +669,9 @@ function get_url_filesize(url) { // ucode-lsp disable
 
 function count_blocked_domains() {
 	if (!dns_output.file || !stat(dns_output.file)) return '0';
-	if (dns_output.blocked_count_filter) {
-		return trim(cmd_output(sprintf("sed '%s' %s | wc -l", dns_output.blocked_count_filter, shell_quote(dns_output.file)))) || '0';
-	}
-	return trim(cmd_output('wc -l < ' + shell_quote(dns_output.file))) || '0';
+	if (dns_output.blocked_count_filter)
+		return '' + count_lines(dns_output.file, dns_output.blocked_count_filter);
+	return '' + count_lines(dns_output.file);
 }
 
 // ── DNS Output Values ───────────────────────────────────────────────
@@ -618,14 +715,13 @@ function adb_file(action) {
 	case 'test_cache':
 		return (stat(dns_output.cache)?.size > 0);
 	case 'test_gzip':
-		return (stat(dns_output.gzip)?.size > 0) &&
-			system(sprintf('gzip -t -c %s >/dev/null 2>/dev/null', shell_quote(dns_output.gzip))) == 0;
+		return (stat(dns_output.gzip)?.size > 0) && gzip_test(dns_output.gzip);
 	case 'create_gzip':
 		if (!(stat(dns_output.file)?.size > 0)) return false;
 		unlink(dns_output.gzip);
 		// Write temp file in same directory as destination to avoid cross-filesystem rename
 		let gz_tmp = dns_output.gzip + '.tmp';
-		if (system(sprintf('gzip < %s > %s', shell_quote(dns_output.file), shell_quote(gz_tmp))) == 0) {
+		if (gzip_compress(dns_output.file, gz_tmp)) {
 			if (rename(gz_tmp, dns_output.gzip)) {
 				return true;
 			}
@@ -636,7 +732,7 @@ function adb_file(action) {
 	case 'unpack':
 	case 'unpack_gzip':
 		if (stat(dns_output.gzip)?.size > 0)
-			return system(sprintf('gzip -dc < %s > %s', shell_quote(dns_output.gzip), shell_quote(dns_output.cache))) == 0;
+			return gzip_decompress(dns_output.gzip, dns_output.cache);
 		return false;
 	case 'remove_cache':
 		unlink(dns_output.cache);
@@ -873,7 +969,7 @@ function adb_config_cache(action, variable) {
 			if (!(stat(pkg.run_file)?.size > 0)) return 'on_boot';
 			if ((readfile(pkg.config_file) || '') != (readfile(pkg.run_file) || '')) {
 				// Config changed — determine if reload or restart
-				let run_dir = replace(pkg.run_file, /\/[^\/]+$/, '');
+				let run_dir = dirname(pkg.run_file);
 				let cached = cursor(run_dir);
 				cached.load(pkg.name);
 				let reload_triggers = split(pkg.triggers.reload, ' ');
@@ -894,7 +990,7 @@ function adb_config_cache(action, variable) {
 			}
 			return '';
 		default: {
-			let run_dir = replace(pkg.run_file, /\/[^\/]+$/, '');
+			let run_dir = dirname(pkg.run_file);
 			let old_cfg = cursor(run_dir);
 			old_cfg.load(pkg.name);
 			return old_cfg.get(pkg.name, 'config', variable) ?? '';
@@ -1035,7 +1131,7 @@ function load_environment(param, validation_result) {
 	let dirs = [pkg.run_file, pkg.status_file, dns_output.file, dns_output.cache, dns_output.gzip, dns_output.config];
 	for (let f in dirs) {
 		if (!f) continue;
-		let dir = replace(f, /\/[^\/]+$/, '');
+		let dir = dirname(f);
 		if (!mkdir_p(dir)) {
 			if (param != 'quiet')
 				push(status_data.errors, { code: 'errorOutputDirCreate', info: f });
@@ -1272,7 +1368,7 @@ function resolver(action) {
 	case 'on_stop':
 	case 'quiet':
 	case 'quiet_restart':
-		return system(sprintf('/etc/init.d/%s restart >/dev/null 2>&1', resolver_name)) == 0;
+		return service_restart(resolver_name);
 
 	case 'on_start':
 		if (!adb_file('test')) {
@@ -1310,7 +1406,7 @@ function resolver(action) {
 	case 'restart':
 		output.dns('Restarting ' + resolver_name + ' ');
 		status_data.message = 'Restarting ' + resolver_name;
-		if (system(sprintf('/etc/init.d/%s restart >/dev/null 2>&1', resolver_name)) == 0) {
+		if (service_restart(resolver_name)) {
 			status_data.status = 'statusSuccess';
 			led_on(cfg.led);
 			output.ok();
@@ -1324,7 +1420,7 @@ function resolver(action) {
 	case 'sanity':
 		if (!cfg.dnsmasq_sanity_check) return true;
 		output.dns('Sanity check for ' + cfg.dns + ' TLDs ');
-		if (cmd_rc(sprintf("grep -qvE '\\.|server:' %s", shell_quote(dns_output.file))) != 0) {
+		if (!grep_test('\\.|server:', dns_output.file, '-qvE')) {
 			output.ok();
 		} else {
 			push(status_data.warnings, { code: 'warningSanityCheckTLD', info: dns_output.file });
@@ -1337,7 +1433,7 @@ function resolver(action) {
 		case 'smartdns': dot_pattern = '^\\.'; break;
 		case 'unbound': dot_pattern = '"\\.'; break;
 		}
-		if (dot_pattern && cmd_rc(sprintf("grep -q '%s' %s", dot_pattern, shell_quote(dns_output.file))) != 0) {
+		if (dot_pattern && !grep_test(dot_pattern, dns_output.file)) {
 			output.ok();
 		} else {
 			push(status_data.warnings, { code: 'warningSanityCheckLeadingDot', info: dns_output.file });
@@ -1370,7 +1466,7 @@ function resolver(action) {
 		resolver('cleanup');
 		output.ok();
 		output.dns('Restarting ' + resolver_name + ' ');
-		if (system(sprintf('/etc/init.d/%s restart >/dev/null 2>&1', resolver_name)) == 0) {
+		if (service_restart(resolver_name)) {
 			led_off(cfg.led);
 			output.ok();
 			return true;
@@ -1465,8 +1561,7 @@ function process_file_url(section, url_override, action_override) {
 	}
 
 	let r_tmp = trim(cmd_output('mktemp -q -t "' + pkg.name + '_tmp.XXXXXXXX"'));
-	if (!url || system(sprintf('%s %s %s %s', state.dl_command, shell_quote(url), state.dl_flag, shell_quote(r_tmp)) + ' 2>/dev/null') != 0 ||
-		!(stat(r_tmp)?.size > 0)) {
+	if (!url || !download(url, r_tmp) || !(stat(r_tmp)?.size > 0)) {
 		output.info(sym.fail[0]);
 		output.verbose('[ DL ] ' + type_name + ' ' + label + ' ' + sym.fail[1] + '\\n');
 		push(status_data.errors, { code: 'errorDownloadingList', info: name || url });
@@ -1492,10 +1587,10 @@ function process_file_url(section, url_override, action_override) {
 			return true;
 		}
 		if (format == 'hosts')
-			system(sprintf("sed -i '/# Title: StevenBlack/,/# Custom host records are listed here/d' %s", shell_quote(r_tmp)));
+			sed_inplace('/# Title: StevenBlack/,/# Custom host records are listed here/d', r_tmp);
 
 		if (filter && file_action != 'file')
-			system(sprintf("sed -i %s %s", shell_quote(filter), shell_quote(r_tmp)));
+			sed_inplace(filter, r_tmp);
 
 		if (!(stat(r_tmp)?.size > 0)) {
 			output.info(sym.fail[0]);
@@ -1503,11 +1598,16 @@ function process_file_url(section, url_override, action_override) {
 			push(status_data.errors, { code: 'errorParsingList', info: name || url });
 		} else {
 			// Ensure file ends with newline, then append to accumulator
-			let content = readfile(r_tmp) || '';
-			if (length(content) > 0 && substr(content, -1) != '\n')
-				content += '\n';
+			ensure_trailing_newline(r_tmp);
+			let inp = open(r_tmp, 'r');
 			let out = open(d_tmp, 'a');
-			if (out) { out.write(content); out.close(); }
+			if (inp && out) {
+				let chunk;
+				while ((chunk = inp.read(65536)) && length(chunk))
+					out.write(chunk);
+			}
+			if (inp) inp.close();
+			if (out) out.close();
 			output.info(sym.ok[0]);
 			output.verbose('[ DL ] ' + type_name + ' ' + label + ' (' + format + ') ' + sym.ok[1] + '\\n');
 		}
@@ -1618,12 +1718,12 @@ function download_lists() {
 		let fd = popen(sprintf("sed %s >> %s", shell_quote(list_formats.domains.filter), shell_quote(tmp.b)), 'w');
 		if (fd) { fd.write(extra_domains); fd.close(); }
 	}
-	system(sprintf("sed -i '/^[[:space:]]*$/d' %s", shell_quote(tmp.b)));
+	sed_inplace('/^[[:space:]]*$/d', tmp.b);
 
 	if (!(stat(tmp.b)?.size > 0)) return false;
 
 	if (cfg.allow_non_ascii) {
-		if (system(sprintf('sort -u %s > %s', shell_quote(tmp.b), shell_quote(tmp.a))) == 0)
+		if (sort_file(tmp.b, tmp.a, true))
 			output.ok();
 		else { output.fail(); push(status_data.errors, { code: 'errorSorting', info: '' }); }
 	} else {
@@ -1646,12 +1746,11 @@ function download_lists() {
 		output.verbose('[PROC] ' + step_title + ' ');
 		status_data.message = get_text('statusProcessing') + ': ' + step_title;
 
-		let ok = system(sprintf("%s -F '.' '{for(i=NF;i>0;i--) printf \"%%s%%s\", $i, (i>1?\".\":\"\\n\")}' %s > %s", state.awk_cmd, shell_quote(tmp.a), shell_quote(tmp.b))) == 0;
-		if (ok) ok = system(sprintf('sort %s > %s', shell_quote(tmp.b), shell_quote(tmp.a))) == 0;
-		if (ok) ok = system(sprintf("%s 'NR==1{prev=$0;print;next}{len=length(prev);if(substr($0,1,len)==prev && substr($0,len+1,1)==\".\") next;print;prev=$0}' %s > %s",
-			state.awk_cmd, shell_quote(tmp.a), shell_quote(tmp.b))) == 0;
-		if (ok) ok = system(sprintf("%s -F '.' '{for(i=NF;i>0;i--) printf \"%%s%%s\", $i, (i>1?\".\":\"\\n\")}' %s > %s", state.awk_cmd, shell_quote(tmp.b), shell_quote(tmp.a))) == 0;
-		if (ok) ok = system(sprintf('sort -u %s > %s', shell_quote(tmp.a), shell_quote(tmp.b))) == 0;
+		let ok = awk_reverse_labels(tmp.a, tmp.b);
+		if (ok) ok = sort_file(tmp.b, tmp.a);
+		if (ok) ok = awk_dedup_subdomains(tmp.a, tmp.b);
+		if (ok) ok = awk_reverse_labels(tmp.b, tmp.a);
+		if (ok) ok = sort_file(tmp.a, tmp.b, true);
 		if (ok) { output.ok(); }
 		else {
 			output.fail();
@@ -1685,7 +1784,7 @@ function download_lists() {
 		}
 		if (sed_content) {
 			writefile(tmp.sed, sed_content);
-			if (system(sprintf("sed -E -f %s %s > %s", shell_quote(tmp.sed), shell_quote(tmp.b), shell_quote(tmp.a))) == 0 && rename(tmp.a, tmp.b))
+			if (sed_script(tmp.sed, tmp.b, tmp.a) && rename(tmp.a, tmp.b))
 				output.ok();
 			else { output.fail(); push(status_data.errors, { code: 'errorAllowListProcessing', info: '' }); }
 		} else {
@@ -1705,7 +1804,7 @@ function download_lists() {
 
 	if (!dns_output.filter_ipv6) {
 		if (dns_output.filter) {
-			if (system(sprintf("sed '%s' %s > %s", dns_output.filter, shell_quote(tmp.b), shell_quote(tmp.a))) == 0)
+			if (sed_filter(dns_output.filter, tmp.b, tmp.a))
 				output.ok();
 			else { output.fail(); push(status_data.errors, { code: 'errorDataFileFormatting', info: '' }); }
 		} else {
@@ -1714,7 +1813,8 @@ function download_lists() {
 		}
 	} else {
 		if (cfg.dns == 'dnsmasq.addnhosts') {
-			if (system(sprintf("sed '%s' %s > %s && sed '%s' %s >> %s", dns_output.filter, shell_quote(tmp.b), shell_quote(tmp.a), dns_output.filter_ipv6, shell_quote(tmp.b), shell_quote(tmp.a))) == 0)
+			if (sed_filter(dns_output.filter, tmp.b, tmp.a) &&
+				system(sprintf('sed %s %s >> %s', shell_quote(dns_output.filter_ipv6), shell_quote(tmp.b), shell_quote(tmp.a))) == 0)
 				output.ok();
 			else { output.fail(); push(status_data.errors, { code: 'errorDataFileFormatting', info: '' }); }
 		}
@@ -1763,7 +1863,7 @@ function download_lists() {
 		push(status_data.errors, { code: 'errorMovingDataFile', info: dns_output.file });
 	}
 	if (cfg.dns == 'unbound.adb_list')
-		system(sprintf("sed -i '1 i\\server:' %s", shell_quote(dns_output.file)));
+		sed_inplace('1 i\\server:', dns_output.file);
 
 	// Validity check
 	if (cfg.dnsmasq_validity_check && index(cfg.dns, 'dnsmasq.') == 0) {
@@ -1789,9 +1889,8 @@ function download_lists() {
 					grep_pat = null;
 				}
 				if (grep_pat)
-					system(sprintf("sed '%s' %s > %s.pat 2>/dev/null", grep_pat, shell_quote(invalid_file), shell_quote(invalid_file)));
-				system(sprintf("grep -vFf %s.pat %s > %s.valid 2>/dev/null",
-					shell_quote(invalid_file), shell_quote(dns_output.file), shell_quote(dns_output.file)));
+					sed_filter(grep_pat, invalid_file, invalid_file + '.pat');
+				grep_exclude_file(invalid_file + '.pat', dns_output.file, dns_output.file + '.valid');
 				rename(dns_output.file + '.valid', dns_output.file);
 				logger(sprintf('Removed %d invalid entries from %s.', invalid_count, cfg.dns));
 				push(status_data.warnings, { code: 'warningInvalidDomainsRemoved', info: '' + invalid_count });
@@ -1836,8 +1935,7 @@ function adb_config_update(param) {
 	output.info('Updating config ');
 	output.verbose('[ DL ] Config Update: ' + label + ' ');
 	let r_tmp = trim(cmd_output('mktemp -q -t "' + pkg.name + '_tmp.XXXXXXXX"'));
-	if (system(sprintf('%s %s %s %s 2>/dev/null', state.dl_command, shell_quote(cfg.config_update_url), state.dl_flag, shell_quote(r_tmp))) != 0 ||
-		!(stat(r_tmp)?.size > 0)) {
+	if (!download(cfg.config_update_url, r_tmp) || !(stat(r_tmp)?.size > 0)) {
 		output.failn();
 		push(status_data.errors, { code: 'errorDownloadingConfigUpdate', info: '' });
 	} else {
@@ -2216,11 +2314,11 @@ function allow(string) {
 		let escaped = replace(c, /\./g, '\\.');
 		switch (split(cfg.dns, '.')[0]) {
 		case 'dnsmasq':
-			system(sprintf("sed -i '\\:/\\(/%s\\|.%s\\):d' %s", escaped, escaped, shell_quote(dns_output.file)));
+			sed_inplace(sprintf('\\:/\\(/%s\\|.%s\\):d', escaped, escaped), dns_output.file);
 			break;
 		case 'smartdns':
 		case 'unbound':
-			system(sprintf("sed -i '\\:\\(\"%s\\|.%s\"\\):d' %s", escaped, escaped, shell_quote(dns_output.file)));
+			sed_inplace(sprintf('\\:\\("%s\\|.%s"\\):d', escaped, escaped), dns_output.file);
 			break;
 		}
 		output.ok();
@@ -2253,7 +2351,7 @@ function allow(string) {
 			if (system('nft flush set inet fw4 adb4 2>/dev/null') == 0) output.ok(); else output.fail();
 		}
 		output.dns('Restarting ' + resolver_name + ' ');
-		if (system(sprintf('/etc/init.d/%s restart >/dev/null 2>&1', resolver_name)) == 0) output.ok(); else output.fail();
+		if (service_restart(resolver_name)) output.ok(); else output.fail();
 	} else {
 		output.fail();
 	}
@@ -2273,13 +2371,15 @@ function check(param) {
 	}
 	for (let string in split('' + param, /\s+/)) {
 		if (!string) continue;
-		let c = int(trim(cmd_output(sprintf("grep -c -E %s %s", shell_quote(string), shell_quote(dns_output.file)))) || '0');
+		let c = grep_count(string, dns_output.file, '-c -E');
 		if (c > 0) {
 			let word = (c == 1) ? '1 match' : c + ' matches';
 			output.info("Found " + word + " for '" + string + "' in '" + dns_output.file + "'.\\n");
 			output.verbose("[PROC] Found " + word + " for '" + string + "' in '" + dns_output.file + "'.\\n");
 			if (c <= 20) {
-				let matches = cmd_output(sprintf("grep %s %s | sed '%s'", shell_quote(string), shell_quote(dns_output.file), dns_output.parse_filter || ''));
+				let matches = grep_output(string, dns_output.file);
+				if (dns_output.parse_filter)
+					matches = cmd_output(sprintf("grep %s %s | sed '%s'", shell_quote(string), shell_quote(dns_output.file), dns_output.parse_filter));
 				if (matches) output.print(matches + '\\n');
 			}
 		} else {
@@ -2295,13 +2395,15 @@ function check_tld() {
 		output.print("No block-list ('" + dns_output.file + "') found.\\n");
 		return;
 	}
-	let c = int(trim(cmd_output(sprintf("grep -cvE '\\.|server:' %s", shell_quote(dns_output.file)))) || '0');
+	let c = grep_count('\\.|server:', dns_output.file, '-cvE');
 	if (c > 0) {
 		let word = (c == 1) ? '1 match for TLD' : c + ' matches for TLDs';
 		output.info("Found " + word + " in '" + dns_output.file + "'.\\n");
 		output.verbose("[PROC] Found " + word + " in '" + dns_output.file + "'.\\n");
 		if (c <= 20) {
-			let matches = cmd_output(sprintf("grep -vE '\\.|server:' %s | sed '%s'", shell_quote(dns_output.file), dns_output.parse_filter || ''));
+			let matches = grep_output('\\.|server:', dns_output.file, '-vE');
+			if (dns_output.parse_filter)
+				matches = cmd_output(sprintf("grep -vE '\\.|server:' %s | sed '%s'", shell_quote(dns_output.file), dns_output.parse_filter));
 			if (matches) output.print(matches + '\\n');
 		}
 	} else {
@@ -2323,13 +2425,15 @@ function check_leading_dot() {
 	case 'unbound': search_string = '"\\.'; break;
 	default: return;
 	}
-	let c = int(trim(cmd_output(sprintf("grep -c %s %s", shell_quote(search_string), shell_quote(dns_output.file)))) || '0');
+	let c = grep_count(search_string, dns_output.file);
 	if (c > 0) {
 		let word = (c == 1) ? '1 match for leading-dot domain' : c + ' matches for leading-dot domains';
 		output.info("Found " + word + " in '" + dns_output.file + "'.\\n");
 		output.verbose("[PROC] Found " + word + " in '" + dns_output.file + "'.\\n");
 		if (c <= 20) {
-			let matches = cmd_output(sprintf("grep %s %s | sed '%s'", shell_quote(search_string), shell_quote(dns_output.file), dns_output.parse_filter || ''));
+			let matches = grep_output(search_string, dns_output.file);
+			if (dns_output.parse_filter)
+				matches = cmd_output(sprintf("grep %s %s | sed '%s'", shell_quote(search_string), shell_quote(dns_output.file), dns_output.parse_filter));
 			if (matches) output.print(matches + '\\n');
 		}
 	} else {
@@ -2360,8 +2464,7 @@ function check_lists(param) {
 			return;
 		}
 		let r_tmp = trim(cmd_output('mktemp -q -t "' + pkg.name + '_tmp.XXXXXXXX"'));
-		if (system(sprintf('%s %s %s %s 2>/dev/null', state.dl_command, shell_quote(url), state.dl_flag, shell_quote(r_tmp))) != 0 ||
-			!(stat(r_tmp)?.size > 0)) {
+		if (!download(url, r_tmp) || !(stat(r_tmp)?.size > 0)) {
 			output.failn();
 			return;
 		}
@@ -2370,12 +2473,12 @@ function check_lists(param) {
 
 		for (let string in split('' + param, /\s+/)) {
 			if (!string) continue;
-			let c = int(trim(cmd_output(sprintf("grep -c -E %s %s", shell_quote(string), shell_quote(r_tmp)))) || '0');
+			let c = grep_count(string, r_tmp, '-c -E');
 			if (c > 0) {
 				let word = (c == 1) ? '1 match' : c + ' matches';
 				output.info("found " + word + " for '" + string + "'.\\n");
 				output.verbose("[PROC] Found " + word + " for '" + string + "' in '" + url + "'.\\n");
-				let matches = cmd_output(sprintf("grep %s %s", shell_quote(string), shell_quote(r_tmp)));
+				let matches = grep_output(string, r_tmp);
 				if (matches) output.print(matches + '\\n');
 			} else {
 				output.info("'" + string + "' not found.\\n");
@@ -2490,7 +2593,7 @@ function get_init_status(name) {
 		push(warnings_arr, { code: e.code, info: e.info });
 
 	// Service enabled/running
-	let enabled = (system(sprintf('/etc/init.d/%s enabled >/dev/null 2>&1', pkg.name)) == 0);
+	let enabled = service_enabled(pkg.name);
 	let running = (stat(pkg.run_file)?.size > 0);
 
 	// Force DNS state
