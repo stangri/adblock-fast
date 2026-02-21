@@ -102,7 +102,7 @@ sed \
 
 # Append test-helper exports to the patched module.
 # We add a _test_internals object that gives tests access to module-private state.
-# NOTE: cfg is accessed via get_cfg()/set_cfg() because load_package_config()
+# NOTE: cfg is accessed via get_cfg()/set_cfg() because env.load_config()
 # reassigns cfg, which would make a direct reference stale.
 sed -i '/^export default {/,/^};/{
 	/process_file_url,/a\
@@ -110,7 +110,6 @@ sed -i '/^export default {/,/^};/{
 \t_test_internals: {\
 \t\tdownload_lists: download_lists,\
 \t\tdetect_file_type: detect_file_type,\
-\t\tdns_set_output_values: dns_set_output_values,\
 \t\tdns_modes: dns_modes,\
 \t\tget_cfg: function() { return cfg; },\
 \t\tset_cfg: function(k, v) { cfg[k] = v; },\

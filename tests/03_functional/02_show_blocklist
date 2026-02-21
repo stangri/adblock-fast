@@ -6,14 +6,14 @@ import { popen } from 'fs';
 let ti = adb._test_internals;
 
 // Build the blocklist
-adb.load_package_config();
+adb.env.load_config();
 ti.set_cfg('dns', 'dnsmasq.servers');
 ti.set_cfg('dnsmasq_sanity_check', false);
 ti.set_cfg('dnsmasq_validity_check', false);
 ti.set_cfg('heartbeat_domain', null);
 ti.set_cfg('config_update_enabled', false);
 ti.set_cfg('update_config_sizes', false);
-ti.dns_set_output_values('dnsmasq.servers');
+ti.env.dns_set_output_values('dnsmasq.servers');
 ti.append_urls();
 ti.download_lists();
 

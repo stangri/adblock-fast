@@ -14,7 +14,7 @@ import { connect } from 'ubus';
 const pkg = {
 	name: 'adblock-fast',
 	version: 'dev-test',
-	compat: '12',
+	compat: '13',
 	memory_threshold: 33554432,
 	config_file: '/etc/config/adblock-fast',
 	dnsmasq_file: '/var/run/adblock-fast/adblock-fast.dnsmasq',
@@ -161,8 +161,6 @@ let state = {
 	is_tty: false,
 	output_queue: '',
 	fw4_restart: false,
-	load_package_config_flag: false,
-	load_environment_flag: false,
 };
 
 // ── Environment (platform capabilities, cached detection) ───────────
@@ -183,8 +181,10 @@ let env = {
 	// Downloader (set lazily by env.get_downloader())
 	_dl_cache: null,
 
-	// Guard flag
+	// Guard flags
 	_detected: false,
+	_config_loaded: false,
+	_loaded: false,
 };
 
 let dns_output = {
@@ -199,7 +199,7 @@ let dns_output = {
 	parse_filter: '',
 };
 
-// Config values loaded by load_package_config()
+// Config values loaded by env.load_config()
 let cfg = {};
 
 // ── Shell / System Helpers ──────────────────────────────────────────
@@ -734,7 +734,7 @@ function count_blocked_domains() {
 
 // ── DNS Output Values ───────────────────────────────────────────────
 
-function dns_set_output_values(d) {
+env.dns_set_output_values = function(d) {
 	let dc = dns_modes[d];
 	if (!dc) return;
 	dns_output.file = dc.file;
@@ -751,7 +751,7 @@ function dns_set_output_values(d) {
 		dns_output.filter = dc.format_filter;
 	if (d == 'dnsmasq.addnhosts' && cfg.ipv6_enabled && dc.format_filter_ipv6)
 		dns_output.filter_ipv6 = dc.format_filter_ipv6;
-}
+};
 
 // ── adb_file ────────────────────────────────────────────────────────
 
@@ -805,7 +805,7 @@ function adb_file(action) {
 // ── Declarative Config Schema ───────────────────────────────────────
 // Each entry: [type, default] — mirrors the shell load_validate_config() spec.
 
-const config_schema = {
+const config_schema = { // ucode-lsp disable
 	// Booleans
 	allow_non_ascii:         ['bool', false],
 	canary_domains_icloud:   ['bool', false],
@@ -851,7 +851,7 @@ const config_schema = {
 
 // ── parse_options ───────────────────────────────────────────────────
 
-function parse_options(raw, schema) {
+function parse_options(raw, schema) { // ucode-lsp disable
 	let result = {};
 	for (let key in schema) {
 		let spec = schema[key];
@@ -883,19 +883,19 @@ function parse_options(raw, schema) {
 	return result;
 }
 
-// ── load_package_config ─────────────────────────────────────────────
+// ── env.load_config ─────────────────────────────────────────────────
 
-function load_package_config() {
-	if (state.load_package_config_flag) return;
+env.load_config = function() {
+	if (env._config_loaded) return;
 	state.is_tty = system('[ -t 2 ]') == 0 ? true : false;
 	let raw = uci(pkg.name, true).get_all(pkg.name, 'config') || {};
 	cfg = parse_options(raw, config_schema);
-	dns_set_output_values(cfg.dns);
-	state.load_environment_flag = false;
+	env.dns_set_output_values(cfg.dns);
+	env._loaded = false;
 	env._detected = false;
 	env._dl_cache = null;
-	state.load_package_config_flag = true;
-}
+	env._config_loaded = true;
+};
 
 // ── load_dl_command ─────────────────────────────────────────────────
 
@@ -970,7 +970,7 @@ function adb_config_cache(action, variable) {
 
 // ── append_url (collect file_url sections) ──────────────────────────
 
-function append_urls() {
+function append_urls() { // ucode-lsp disable
 	cfg.allowed_url = '';
 	cfg.blocked_url = '';
 	uci(pkg.name).foreach(pkg.name, 'file_url', (s) => {
@@ -984,11 +984,11 @@ function append_urls() {
 	});
 }
 
-// ── load_environment ────────────────────────────────────────────────
+// ── env.load ────────────────────────────────────────────────────────
 
-function load_environment(param, validation_result) {
-	if (state.load_environment_flag) return true;
-	load_package_config();
+env.load = function(param, validation_result) {
+	if (env._loaded) return true;
+	env.load_config();
 
 	if (!cfg.enabled) {
 		push(status_data.errors, { code: 'errorServiceDisabled', info: '' });
@@ -1090,7 +1090,7 @@ function load_environment(param, validation_result) {
 		}
 
 		// Re-sync dns_output after any cfg.dns fallback
-		dns_set_output_values(cfg.dns);
+		env.dns_set_output_values(cfg.dns);
 
 		// Clean up files for non-active cfg.dns modes
 		for (let mode in dns_modes) {
@@ -1186,9 +1186,9 @@ function load_environment(param, validation_result) {
 		break;
 	}
 
-	state.load_environment_flag = true;
+	env._loaded = true;
 	return true;
-}
+};
 
 // ── resolver ────────────────────────────────────────────────────────
 
@@ -1945,7 +1945,7 @@ function download_lists() {
 
 function adb_config_update(param) {
 	param = param || 'quiet';
-	load_package_config();
+	env.load_config();
 	let label = replace('' + cfg.config_update_url, /^[a-z]+:\/\//, '');
 	label = replace(label, /\/.*$/, '');
 	if (!cfg.enabled) return;
@@ -1981,14 +1981,61 @@ function adb_config_update(param) {
 		uci(pkg.name).commit(pkg.name);
 }
 
+// ── get_file_url_list ────────────────────────────────────────────────
+
+function get_file_url_list() {
+	let files = [];
+	uci(pkg.name).foreach(pkg.name, 'file_url', (s) => {
+		let size = s.size;
+		if (!size && s.url) size = get_url_filesize(s.url);
+		push(files, { name: s.name || s.url, url: s.url, size: size || '' });
+	});
+	return files;
+}
+
 // ── _build_procd_data ───────────────────────────────────────────────
 
 function _build_procd_data() {
 	let result = {};
 	result.version = pkg.version;
 	result.status = status_data.status;
+	result.message = status_data.message;
+	result.stats = status_data.stats;
 	result.packageCompat = int(pkg.compat);
 	result.entries = int(count_blocked_domains());
+	result.dns = cfg.dns;
+	result.outputFile = dns_output.file;
+	result.outputCache = dns_output.cache;
+
+	let gzip_path = cfg.compressed_cache_dir
+		? cfg.compressed_cache_dir + '/' + dns_output.gzip
+		: '';
+	result.outputGzip = gzip_path;
+
+	// Force DNS
+	let force_dns_ports = [];
+	if (cfg.force_dns && cfg.force_dns_port) {
+		force_dns_ports = split('' + cfg.force_dns_port, /[\s,]+/);
+	}
+	result.force_dns_active = length(force_dns_ports) > 0;
+	result.force_dns_ports = force_dns_ports;
+
+	// Platform support
+	result.platform = {
+		ipset_installed: env.ipset_supported,
+		nft_installed: env.nft_installed,
+		dnsmasq_installed: env.dnsmasq_installed,
+		dnsmasq_ipset_support: env.check_dnsmasq_ipset(),
+		dnsmasq_nftset_support: env.check_dnsmasq_nftset(),
+		smartdns_installed: env.smartdns_installed,
+		smartdns_ipset_support: env.smartdns_installed && env.ipset_supported,
+		smartdns_nftset_support: env.smartdns_installed && env.nft_installed,
+		unbound_installed: env.unbound_installed,
+		leds: lsdir('/sys/class/leds') || [],
+	};
+
+	// File URL sizes
+	result.file_url = get_file_url_list();
 
 	// Errors
 	result.errors = [];
@@ -2068,8 +2115,49 @@ function emit_procd_shell(data) {
 
 	push(lines, 'json_add_string version ' + shell_quote(data.version || ''));
 	push(lines, 'json_add_string status ' + shell_quote(data.status || ''));
+	push(lines, 'json_add_string message ' + shell_quote(data.message || ''));
+	push(lines, 'json_add_string stats ' + shell_quote(data.stats || ''));
 	push(lines, 'json_add_int packageCompat ' + shell_quote('' + (data.packageCompat || 0)));
 	push(lines, 'json_add_int entries ' + shell_quote('' + (data.entries || 0)));
+	push(lines, 'json_add_string dns ' + shell_quote(data.dns || ''));
+	push(lines, 'json_add_string outputFile ' + shell_quote(data.outputFile || ''));
+	push(lines, 'json_add_string outputCache ' + shell_quote(data.outputCache || ''));
+	push(lines, 'json_add_string outputGzip ' + shell_quote(data.outputGzip || ''));
+	push(lines, 'json_add_boolean force_dns_active ' + shell_quote(data.force_dns_active ? '1' : '0'));
+
+	push(lines, 'json_add_array force_dns_ports');
+	for (let p in (data.force_dns_ports || []))
+		push(lines, 'json_add_string \'\' ' + shell_quote('' + p));
+	push(lines, 'json_close_array');
+
+	// Platform support
+	push(lines, 'json_add_object platform');
+	let plat = data.platform || {};
+	push(lines, 'json_add_boolean ipset_installed ' + shell_quote(plat.ipset_installed ? '1' : '0'));
+	push(lines, 'json_add_boolean nft_installed ' + shell_quote(plat.nft_installed ? '1' : '0'));
+	push(lines, 'json_add_boolean dnsmasq_installed ' + shell_quote(plat.dnsmasq_installed ? '1' : '0'));
+	push(lines, 'json_add_boolean dnsmasq_ipset_support ' + shell_quote(plat.dnsmasq_ipset_support ? '1' : '0'));
+	push(lines, 'json_add_boolean dnsmasq_nftset_support ' + shell_quote(plat.dnsmasq_nftset_support ? '1' : '0'));
+	push(lines, 'json_add_boolean smartdns_installed ' + shell_quote(plat.smartdns_installed ? '1' : '0'));
+	push(lines, 'json_add_boolean smartdns_ipset_support ' + shell_quote(plat.smartdns_ipset_support ? '1' : '0'));
+	push(lines, 'json_add_boolean smartdns_nftset_support ' + shell_quote(plat.smartdns_nftset_support ? '1' : '0'));
+	push(lines, 'json_add_boolean unbound_installed ' + shell_quote(plat.unbound_installed ? '1' : '0'));
+	push(lines, 'json_add_array leds');
+	for (let led in (plat.leds || []))
+		push(lines, 'json_add_string \'\' ' + shell_quote('' + led));
+	push(lines, 'json_close_array');
+	push(lines, 'json_close_object');
+
+	// File URL sizes
+	push(lines, 'json_add_array file_url');
+	for (let f in (data.file_url || [])) {
+		push(lines, "json_add_object ''");
+		push(lines, 'json_add_string name ' + shell_quote(f.name || ''));
+		push(lines, 'json_add_string url ' + shell_quote(f.url || ''));
+		push(lines, 'json_add_string size ' + shell_quote('' + (f.size || '')));
+		push(lines, 'json_close_object');
+	}
+	push(lines, 'json_close_array');
 
 	push(lines, 'json_add_array errors');
 	for (let e in (data.errors || [])) {
@@ -2111,7 +2199,7 @@ function emit_procd_shell(data) {
 // ── status_service ──────────────────────────────────────────────────
 
 function status_service(param) {
-	load_package_config();
+	env.load_config();
 	// When called from start() the in-memory status_data is already correct;
 	// reloading from file would overwrite it with stale data.
 	if (param != 'on_start_success' && param != 'on_start_failure')
@@ -2156,13 +2244,13 @@ function start(args) {
 	status_json('reset');
 
 	if (param == 'on_boot') {
-		load_environment(param);  // on_boot: just loads config + dns_output
+		env.load(param);  // on_boot: just loads config + dns_output
 		if (!adb_file('test_gzip') && !adb_file('test_cache'))
 			return null;
 	}
 
 	adb_config_update(param);
-	if (!load_environment(param)) return null;  // memoized if already called above
+	if (!env.load(param)) return null;  // memoized if already called above
 
 	let action = adb_config_cache('get', 'trigger_service');
 	state.fw4_restart = adb_config_cache('get', 'trigger_fw4');
@@ -2297,7 +2385,7 @@ function dl() {
 // ── stop ────────────────────────────────────────────────────────────
 
 function stop() {
-	load_package_config();
+	env.load_config();
 	if (adb_file('test')) {
 		output.info('Stopping ' + pkg.service_name + '... ');
 		output.verbose('[STOP] Stopping ' + pkg.service_name + '... ');
@@ -2322,7 +2410,7 @@ function stop() {
 // ── Extra Commands ──────────────────────────────────────────────────
 
 function allow(string) {
-	load_package_config();
+	env.load_config();
 	if (!adb_file('test')) {
 		output.print("No block-list ('" + dns_output.file + "') found.\\n");
 		return;
@@ -2392,7 +2480,7 @@ function allow(string) {
 }
 
 function check(param) {
-	load_package_config();
+	env.load_config();
 	if (!adb_file('test')) {
 		output.print("No block-list ('" + dns_output.file + "') found.\\n");
 		return;
@@ -2422,7 +2510,7 @@ function check(param) {
 }
 
 function check_tld() {
-	load_package_config();
+	env.load_config();
 	if (!adb_file('test')) {
 		output.print("No block-list ('" + dns_output.file + "') found.\\n");
 		return;
@@ -2445,7 +2533,7 @@ function check_tld() {
 }
 
 function check_leading_dot() {
-	load_package_config();
+	env.load_config();
 	if (!adb_file('test')) {
 		output.print("No block-list ('" + dns_output.file + "') found.\\n");
 		return;
@@ -2475,7 +2563,7 @@ function check_leading_dot() {
 }
 
 function check_lists(param) {
-	load_package_config();
+	env.load_config();
 	if (!param) {
 		output.print("Usage: /etc/init.d/" + pkg.name + " check_lists 'domain' ...\\n");
 		return;
@@ -2521,7 +2609,7 @@ function check_lists(param) {
 }
 
 function killcache() {
-	load_package_config();
+	env.load_config();
 	for (let mode in dns_modes) {
 		let dc = dns_modes[mode];
 		unlink(dc.cache);
@@ -2531,7 +2619,7 @@ function killcache() {
 }
 
 function pause(timeout) {
-	load_package_config();
+	env.load_config();
 	timeout = timeout || cfg.pause_timeout || '20';
 	stop();
 	output.info('Sleeping for ' + timeout + ' seconds... ');
@@ -2544,7 +2632,7 @@ function pause(timeout) {
 }
 
 function show_blocklist() {
-	load_package_config();
+	env.load_config();
 	if (dns_output.file && dns_output.parse_filter)
 		system(sprintf("sed '%s' %s", dns_output.parse_filter, shell_quote(dns_output.file)));
 	else if (dns_output.file)
@@ -2552,7 +2640,7 @@ function show_blocklist() {
 }
 
 function sizes() {
-	load_package_config();
+	env.load_config();
 	uci(pkg.name).foreach(pkg.name, 'file_url', (s) => {
 		let size = get_url_filesize(s.url);
 		output.print((s.name || s.url) + (size ? ': ' + size : '') + ' ');
@@ -2571,7 +2659,7 @@ function sizes() {
 // ── service_started (called from init script) ──────────────────────
 
 function service_started(param) {
-	load_package_config();
+	env.load_config();
 	status_json('load');
 	if (cfg.compressed_cache && !adb_file('test_gzip') && adb_file('test')) {
 		let start_time = time();
@@ -2597,7 +2685,7 @@ function service_started(param) {
 // ── get_network_trigger_info (for service_triggers) ─────────────────
 
 function get_network_trigger_info() {
-	load_package_config();
+	env.load_config();
 	let result = { procd_trigger_wan6: cfg.procd_trigger_wan6 };
 	return result;
 }
@@ -2606,65 +2694,61 @@ function get_network_trigger_info() {
 
 function get_init_status(name) {
 	name = name || pkg.name;
-	load_environment('rpcd');
-	status_json('load');
-	let status = status_data.status;
-	let message = status_data.message;
-	let stats = status_data.stats;
+	env.load('rpcd');
 
-	// Get errors
-	let errors_arr = [];
-	for (let e in status_data.errors)
-		push(errors_arr, { code: e.code, info: e.info });
+	// Read pre-computed data from procd service (like PBR)
+	let conn = connect();
+	let ubus_data = conn ? conn.call('service', 'list', { name: pkg.name }) : null;
+	if (conn) conn.disconnect();
+	let svc_data = ubus_data?.[pkg.name]?.instances?.main?.data;
 
-	// Get warnings
-	let warnings_arr = [];
-	for (let e in status_data.warnings)
-		push(warnings_arr, { code: e.code, info: e.info });
-
-	// Service enabled/running
-	let enabled = service_enabled(pkg.name);
-	let running = (stat(pkg.run_file)?.size > 0);
-
-	// Force DNS state
-	let force_dns_active = false;
-	let force_dns_ports = [];
-	if (cfg.force_dns) {
-		let ports = cfg.force_dns_port;
-		if (ports) {
-			force_dns_ports = split('' + ports, /[\s,]+/);
-			if (length(force_dns_ports) > 0)
-				force_dns_active = true;
-		}
-	}
-
-	// Cache/gzip file paths and existence
-	let gzip_path = cfg.compressed_cache_dir
-		? cfg.compressed_cache_dir + '/' + dns_output.gzip
-		: '';
+	// Gzip path (for live file-existence checks)
+	let gzip_path = svc_data?.outputGzip || '';
+	if (!gzip_path && cfg.compressed_cache_dir)
+		gzip_path = cfg.compressed_cache_dir + '/' + dns_output.gzip;
 
 	let result = {};
 	result[name] = {
 		version: pkg.version,
 		packageCompat: int(pkg.compat),
-		enabled: enabled,
-		running: running,
-		status: status || '',
-		message: message || '',
-		stats: stats || '',
-		entries: int(count_blocked_domains()),
-		dns: cfg.dns,
-		outputFile: dns_output.file,
-		outputCache: dns_output.cache,
-		outputGzip: gzip_path,
-		outputFileExists: (stat(dns_output.file)?.size > 0) || false,
-		outputCacheExists: (stat(dns_output.cache)?.size > 0) || false,
+
+		// Live-computed (cheap stat/uci checks)
+		enabled: service_enabled(pkg.name),
+		running: (stat(pkg.run_file)?.size > 0),
+		outputFileExists: (stat(svc_data?.outputFile || dns_output.file)?.size > 0) || false,
+		outputCacheExists: (stat(svc_data?.outputCache || dns_output.cache)?.size > 0) || false,
 		outputGzipExists: gzip_path ? (stat(gzip_path)?.size > 0) || false : false,
-		force_dns_active: force_dns_active,
-		force_dns_ports: force_dns_ports,
-		leds: lsdir('/sys/class/leds') || [],
-		errors: errors_arr,
-		warnings: warnings_arr,
+
+		// From procd ubus data (pre-computed at start/dl time)
+		status: svc_data?.status || '',
+		message: svc_data?.message || '',
+		stats: svc_data?.stats || '',
+		entries: svc_data?.entries || 0,
+		dns: svc_data?.dns || cfg.dns,
+		outputFile: svc_data?.outputFile || dns_output.file,
+		outputCache: svc_data?.outputCache || dns_output.cache,
+		outputGzip: gzip_path,
+		force_dns_active: svc_data?.force_dns_active || false,
+		force_dns_ports: svc_data?.force_dns_ports || [],
+		errors: svc_data?.errors || [],
+		warnings: svc_data?.warnings || [],
+
+		// Platform support (from env.detect, runs once per rpcd lifetime)
+		platform: {
+			ipset_installed: env.ipset_supported,
+			nft_installed: env.nft_installed,
+			dnsmasq_installed: env.dnsmasq_installed,
+			dnsmasq_ipset_support: env.check_dnsmasq_ipset(),
+			dnsmasq_nftset_support: env.check_dnsmasq_nftset(),
+			smartdns_installed: env.smartdns_installed,
+			smartdns_ipset_support: env.smartdns_installed && env.ipset_supported,
+			smartdns_nftset_support: env.smartdns_installed && env.nft_installed,
+			unbound_installed: env.unbound_installed,
+			leds: lsdir('/sys/class/leds') || [],
+		},
+
+		// File URL sizes (from UCI, no network calls when sizes are cached)
+		file_url: get_file_url_list(),
 	};
 	return result;
 }
@@ -2698,7 +2782,7 @@ function get_platform_support(name) {
 
 function get_file_url_filesizes(name) {
 	name = name || pkg.name;
-	load_environment('rpcd');
+	env.load('rpcd');
 
 	let files = [];
 	uci(pkg.name).foreach(pkg.name, 'file_url', (s) => {
@@ -2724,14 +2808,13 @@ export default {
 	pkg,
 
 	// Core lifecycle
-	load_package_config,
+	env,
 	start,
 	stop,
 	status_service,
 
 	// Config
 	load_dl_command,
-	load_environment,
 	adb_config_update,
 	adb_config_cache,
 

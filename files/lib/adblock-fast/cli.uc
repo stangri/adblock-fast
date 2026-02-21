@@ -87,7 +87,7 @@ case 'adb_config_update':
 	break;
 
 case 'load_environment':
-	let env_ok = adb.load_environment(ARGV[0], ARGV[1]);
+	let env_ok = adb.env.load(ARGV[0], ARGV[1]);
 	exit(env_ok ? 0 : 1);
 	break;
 
