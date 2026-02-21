@@ -2261,6 +2261,12 @@ function start(args) {
 	return _build_procd_data();
 }
 
+// ── dl ──────────────────────────────────────────────────────────────
+
+function dl() {
+	return start(['download']);
+}
+
 // ── stop ────────────────────────────────────────────────────────────
 
 function stop() {
@@ -2498,7 +2504,7 @@ function killcache() {
 	resolver('cleanup');
 }
 
-function pause_service(timeout) {
+function pause(timeout) {
 	load();
 	timeout = timeout || cfg.pause_timeout || '20';
 	stop();
@@ -2537,9 +2543,9 @@ function sizes() {
 		uci(pkg.name).commit(pkg.name);
 }
 
-// ── service_started_actions (called from init script) ───────────────
+// ── service_started (called from init script) ──────────────────────
 
-function service_started_actions(param) {
+function service_started(param) {
 	load();
 	status_json('load');
 	if (cfg.compressed_cache && !adb_file('test_gzip') && adb_file('test')) {
@@ -2711,7 +2717,7 @@ export default {
 	check_leading_dot,
 	check_lists,
 	killcache,
-	pause_service,
+	pause,
 	show_blocklist,
 	sizes,
 
@@ -2724,7 +2730,8 @@ export default {
 	// init script helpers
 	is_fw4_restart_needed,
 	get_network_trigger_info,
-	service_started_actions,
+	dl,
+	service_started,
 	emit_procd_shell,
 	process_file_url,
 };

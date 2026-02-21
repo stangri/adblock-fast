@@ -47,7 +47,7 @@ case 'check_lists':
 	break;
 
 case 'dl':
-	let dl_result = adb.start(['download']);
+	let dl_result = adb.dl();
 	if (dl_result)
 		print(adb.emit_procd_shell(dl_result));
 	break;
@@ -57,7 +57,7 @@ case 'killcache':
 	break;
 
 case 'pause':
-	adb.pause_service(ARGV[0]);
+	adb.pause(ARGV[0]);
 	break;
 
 case 'show_blocklist':
@@ -92,7 +92,7 @@ case 'load_environment':
 	break;
 
 case 'service_started':
-	adb.service_started_actions(ARGV[0]);
+	adb.service_started(ARGV[0]);
 	break;
 
 default:
