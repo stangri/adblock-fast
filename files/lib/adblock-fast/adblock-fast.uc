@@ -2747,8 +2747,8 @@ function get_init_status(name) {
 			leds: lsdir('/sys/class/leds') || [],
 		},
 
-		// File URL sizes (from UCI, no network calls when sizes are cached)
-		file_url: get_file_url_list(),
+		// File URL sizes (from procd data, pre-computed at start time)
+		file_url: svc_data?.file_url || [],
 	};
 	return result;
 }
