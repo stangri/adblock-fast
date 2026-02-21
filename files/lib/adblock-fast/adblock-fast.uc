@@ -158,17 +158,33 @@ const canary = {
 
 let state = {
 	script_name: pkg.name,
-	dl_command: '',
-	dl_flag: '',
-	ssl_supported: false,
-	environment_loaded: false,
-	config_loaded: false,
-	fw4_restart: false,
-	dnsmasq_features: '',
-	dnsmasq_ubus: null,
-	awk_cmd: 'awk',
-	output_queue: '',
 	is_tty: false,
+	output_queue: '',
+	fw4_restart: false,
+	load_package_config_flag: false,
+	load_environment_flag: false,
+};
+
+// ── Environment (platform capabilities, cached detection) ───────────
+
+let env = {
+	// Platform capabilities (set by env.detect())
+	dnsmasq_installed: false,
+	dnsmasq_features: '',
+	smartdns_installed: false,
+	unbound_installed: false,
+	ipset_supported: false,
+	nft_installed: false,
+	awk_cmd: 'awk',
+
+	// Resolver service info (cached)
+	dnsmasq_ubus: null,
+
+	// Downloader (set lazily by env.get_downloader())
+	_dl_cache: null,
+
+	// Guard flag
+	_detected: false,
 };
 
 let dns_output = {
@@ -183,7 +199,7 @@ let dns_output = {
 	parse_filter: '',
 };
 
-// Config values loaded by load()
+// Config values loaded by load_package_config()
 let cfg = {};
 
 // ── Shell / System Helpers ──────────────────────────────────────────
@@ -256,6 +272,53 @@ function str_contains_word(haystack, needle) {
 	return index(split('' + haystack, /\s+/), needle) >= 0;
 }
 
+// ── Environment Detection ───────────────────────────────────────────
+
+env.detect = function() {
+	if (env._detected) return;
+	env.dnsmasq_installed = is_present('dnsmasq');
+	env.smartdns_installed = is_present('smartdns');
+	env.unbound_installed = is_present('unbound');
+	env.nft_installed = is_present('nft');
+	env.ipset_supported = is_present('ipset') && cmd_rc('/usr/sbin/ipset help hash:net') == 0;
+	if (is_present('gawk')) env.awk_cmd = 'gawk';
+	if (env.dnsmasq_installed && !env.dnsmasq_features) {
+		let raw = cmd_output('dnsmasq --version');
+		let m = match(raw, /Compile time options:(.+)/);
+		env.dnsmasq_features = (m ? m[1] : '') + ' ';
+	}
+	env._detected = true;
+};
+
+env.get_downloader = function() {
+	if (env._dl_cache) return env._dl_cache;
+	let command, flag, ssl_supported;
+	if (is_present('curl')) {
+		command = 'curl -f --silent --insecure';
+		if (cfg.curl_additional_param) command += ' ' + cfg.curl_additional_param;
+		if (cfg.curl_max_file_size) command += ' --max-filesize ' + cfg.curl_max_file_size;
+		if (cfg.curl_retry) command += ' --retry ' + cfg.curl_retry;
+		if (cfg.download_timeout) command += ' --connect-timeout ' + cfg.download_timeout;
+		flag = '-o';
+	} else if (is_present('/usr/libexec/wget-ssl')) {
+		command = '/usr/libexec/wget-ssl --no-check-certificate -q';
+		if (cfg.download_timeout) command += ' --timeout ' + cfg.download_timeout;
+		flag = '-O';
+	} else if (is_present('wget') && cmd_rc("wget --version 2>/dev/null | grep -q '+https'") == 0) {
+		command = 'wget --no-check-certificate -q';
+		if (cfg.download_timeout) command += ' --timeout ' + cfg.download_timeout;
+		flag = '-O';
+	} else {
+		command = 'uclient-fetch --no-check-certificate -q';
+		if (cfg.download_timeout) command += ' --timeout ' + cfg.download_timeout;
+		flag = '-O';
+	}
+	ssl_supported = cmd_rc("curl --version 2>/dev/null | grep -q 'Protocols: .*https.*'") == 0 ||
+		cmd_rc("wget --version 2>/dev/null | grep -q '+ssl'") == 0;
+	env._dl_cache = { command, flag, ssl_supported };
+	return env._dl_cache;
+};
+
 // ── Shell Command Wrappers ──────────────────────────────────────────
 
 function sed_filter(expr, input, output) {
@@ -322,17 +385,18 @@ function count_lines(file, filter_expr) {
 
 function awk_reverse_labels(input, output) {
 	return system(sprintf("%s -F '.' '{for(i=NF;i>0;i--) printf \"%%s%%s\", $i, (i>1?\".\":\"\\n\")}' %s > %s",
-		state.awk_cmd, shell_quote(input), shell_quote(output))) == 0;
+		env.awk_cmd, shell_quote(input), shell_quote(output))) == 0;
 }
 
 function awk_dedup_subdomains(input, output) {
 	return system(sprintf("%s 'NR==1{prev=$0;print;next}{len=length(prev);if(substr($0,1,len)==prev && substr($0,len+1,1)==\".\") next;print;prev=$0}' %s > %s",
-		state.awk_cmd, shell_quote(input), shell_quote(output))) == 0;
+		env.awk_cmd, shell_quote(input), shell_quote(output))) == 0;
 }
 
 function download(url, dest) {
+	let dlt = env.get_downloader();
 	return system(sprintf('%s %s %s %s 2>/dev/null',
-		state.dl_command, shell_quote(url), state.dl_flag, shell_quote(dest))) == 0;
+		dlt.command, shell_quote(url), dlt.flag, shell_quote(dest))) == 0;
 }
 
 function service_restart(name) {
@@ -583,30 +647,26 @@ function get_text(r, ...args) {
 	}
 }
 
-// ── Resolver Checks ─────────────────────────────────────────────────
+// ── Resolver Checks (env methods) ───────────────────────────────────
 
-function check_dnsmasq() { return is_present('dnsmasq'); }
-function check_smartdns() { return is_present('smartdns'); }
-function check_unbound() { return is_present('unbound'); }
-function check_ipset() { return is_present('ipset') && cmd_rc('/usr/sbin/ipset help hash:net') == 0; }
-function check_nft() { return is_present('nft'); }
+env.check_dnsmasq = function() { env.detect(); return env.dnsmasq_installed; };
+env.check_smartdns = function() { env.detect(); return env.smartdns_installed; };
+env.check_unbound = function() { env.detect(); return env.unbound_installed; };
+env.check_ipset = function() { env.detect(); return env.ipset_supported; };
+env.check_nft = function() { env.detect(); return env.nft_installed; };
 
-function check_dnsmasq_feature(feat) {
-	if (!state.dnsmasq_features) {
-		let raw = cmd_output('dnsmasq --version');
-		let m = match(raw, /Compile time options:(.+)/);
-		state.dnsmasq_features = (m ? m[1] : '') + ' ';
-	}
+env.check_dnsmasq_feature = function(feat) {
+	env.detect();
 	switch (feat) {
-	case 'idn': return index('' + state.dnsmasq_features, ' IDN ') >= 0;
-	case 'ipset': return index('' + state.dnsmasq_features, ' ipset ') >= 0;
-	case 'nftset': return index('' + state.dnsmasq_features, ' nftset ') >= 0;
+	case 'idn': return index(env.dnsmasq_features, ' IDN ') >= 0;
+	case 'ipset': return index(env.dnsmasq_features, ' ipset ') >= 0;
+	case 'nftset': return index(env.dnsmasq_features, ' nftset ') >= 0;
 	}
 	return false;
-}
+};
 
-function check_dnsmasq_ipset() { return check_ipset() && check_dnsmasq_feature('ipset'); }
-function check_dnsmasq_nftset() { return check_nft() && check_dnsmasq_feature('nftset'); }
+env.check_dnsmasq_ipset = function() { return env.check_ipset() && env.check_dnsmasq_feature('ipset'); };
+env.check_dnsmasq_nftset = function() { return env.check_nft() && env.check_dnsmasq_feature('nftset'); };
 
 // ── Port/Firewall Helpers ───────────────────────────────────────────
 
@@ -823,115 +883,25 @@ function parse_options(raw, schema) {
 	return result;
 }
 
-// ── load (config) ───────────────────────────────────────────────────
+// ── load_package_config ─────────────────────────────────────────────
 
-function load() {
-	if (state.config_loaded) return;
+function load_package_config() {
+	if (state.load_package_config_flag) return;
 	state.is_tty = system('[ -t 2 ]') == 0 ? true : false;
 	let raw = uci(pkg.name, true).get_all(pkg.name, 'config') || {};
 	cfg = parse_options(raw, config_schema);
 	dns_set_output_values(cfg.dns);
-	state.environment_loaded = false;
-	state.config_loaded = true;
+	state.load_environment_flag = false;
+	env._detected = false;
+	env._dl_cache = null;
+	state.load_package_config_flag = true;
 }
 
 // ── load_dl_command ─────────────────────────────────────────────────
 
-function load_dl_command() {
-	if (is_present('curl')) {
-		state.dl_command = 'curl -f --silent --insecure';
-		if (cfg.curl_additional_param) state.dl_command += ' ' + cfg.curl_additional_param;
-		if (cfg.curl_max_file_size) state.dl_command += ' --max-filesize ' + cfg.curl_max_file_size;
-		if (cfg.curl_retry) state.dl_command += ' --retry ' + cfg.curl_retry;
-		if (cfg.download_timeout) state.dl_command += ' --connect-timeout ' + cfg.download_timeout;
-		state.dl_flag = '-o';
-	} else if (is_present('/usr/libexec/wget-ssl')) {
-		state.dl_command = '/usr/libexec/wget-ssl --no-check-certificate -q';
-		if (cfg.download_timeout) state.dl_command += ' --timeout ' + cfg.download_timeout;
-		state.dl_flag = '-O';
-	} else if (is_present('wget') && cmd_rc("wget --version 2>/dev/null | grep -q '+https'") == 0) {
-		state.dl_command = 'wget --no-check-certificate -q';
-		if (cfg.download_timeout) state.dl_command += ' --timeout ' + cfg.download_timeout;
-		state.dl_flag = '-O';
-	} else {
-		state.dl_command = 'uclient-fetch --no-check-certificate -q';
-		if (cfg.download_timeout) state.dl_command += ' --timeout ' + cfg.download_timeout;
-		state.dl_flag = '-O';
-	}
+// Thin wrapper for backward compat; real logic is in env.get_downloader()
+function load_dl_command() { env.get_downloader(); }
 
-	if (cmd_rc("curl --version 2>/dev/null | grep -q 'Protocols: .*https.*'") == 0 ||
-		cmd_rc("wget --version 2>/dev/null | grep -q '+ssl'") == 0)
-		state.ssl_supported = true;
-	else
-		state.ssl_supported = false;
-}
-
-// ── load_network ────────────────────────────────────────────────────
-
-function load_network(param) {
-	let wan_if = null;
-	let wan_gw = null;
-	let wan_if_timeout = int(cfg.procd_boot_wan_timeout || 60);
-	let wan_gw_timeout = 5;
-
-	let counter = 0;
-	while (!wan_if) {
-		let ub = connect();
-		if (ub) {
-			let dump = ub.call('network.interface', 'dump');
-			if (dump?.interface) {
-				for (let iface in dump.interface) {
-					for (let r in (iface.route || []))
-						if (r.target == '0.0.0.0') { wan_if = iface.interface; break; }
-					if (wan_if) break;
-				}
-			}
-			ub.disconnect();
-		}
-		if (wan_if) {
-			output.info("WAN interface found: '" + wan_if + "'.\\n");
-			output.verbose("[BOOT] WAN interface found: '" + wan_if + "'.\\n");
-			break;
-		}
-		if (counter > wan_if_timeout) {
-			output.info("WAN interface timeout, assuming 'wan'.\\n");
-			output.verbose("[BOOT] WAN interface timeout, assuming 'wan'.\\n");
-			wan_if = 'wan';
-			break;
-		}
-		counter++;
-		output.info("Waiting to discover WAN Interface...\\n");
-		output.verbose("[BOOT] Waiting to discover WAN Interface...\\n");
-		system('sleep 1');
-	}
-
-	// Check if PPPoE → extend gateway timeout
-	let proto = uci('network').get('network', wan_if, 'proto');
-	if (proto == 'pppoe') wan_gw_timeout += 10;
-
-	counter = 0;
-	while (counter <= wan_gw_timeout) {
-		let ub = connect();
-		if (ub) {
-			let status = ub.call('network.interface.' + wan_if, 'status');
-			for (let r in (status?.route || []))
-				if (r.target == '0.0.0.0') { wan_gw = r.nexthop; break; }
-			ub.disconnect();
-		}
-		if (wan_gw) {
-			output.info("WAN gateway found: '" + wan_gw + ".'\\n");
-			output.verbose("[BOOT] WAN gateway found: '" + wan_gw + ".'\\n");
-			return true;
-		}
-		counter++;
-		output.info("Waiting to discover " + wan_if + " gateway...\\n");
-		output.verbose("[BOOT] Waiting to discover " + wan_if + " gateway...\\n");
-		system('sleep 1');
-	}
-	push(status_data.errors, { code: 'errorNoWanGateway', info: '' });
-	output.error(get_text('errorNoWanGateway'));
-	return false;
-}
 
 // ── detect_file_type ────────────────────────────────────────────────
 
@@ -1017,8 +987,8 @@ function append_urls() {
 // ── load_environment ────────────────────────────────────────────────
 
 function load_environment(param, validation_result) {
-	if (state.environment_loaded) return true;
-	load();
+	if (state.load_environment_flag) return true;
+	load_package_config();
 
 	if (!cfg.enabled) {
 		push(status_data.errors, { code: 'errorServiceDisabled', info: '' });
@@ -1036,130 +1006,187 @@ function load_environment(param, validation_result) {
 		return false;
 	}
 
-	// Check resolver presence
-	let dns_family = split(cfg.dns, '.')[0];
-	switch (dns_family) {
-	case 'dnsmasq':
-		if (!check_dnsmasq()) {
-			if (param != 'quiet') {
-				push(status_data.errors, { code: 'errorDNSReload', info: '' });
-				output.error("Resolver 'dnsmasq' not found");
+	// ── nested helpers ──────────────────────────────────────────────
+
+	let _check_resolver_environment = function() {
+		// Check resolver presence
+		let dns_family = split(cfg.dns, '.')[0];
+		switch (dns_family) {
+		case 'dnsmasq':
+			if (!env.check_dnsmasq()) {
+				if (param != 'quiet') {
+					push(status_data.errors, { code: 'errorDNSReload', info: '' });
+					output.error("Resolver 'dnsmasq' not found");
+				}
+				return false;
 			}
-			return false;
-		}
-		if (check_dnsmasq_feature('idn')) cfg.allow_non_ascii = false;
-		break;
-	case 'smartdns':
-		if (!check_smartdns()) {
-			if (param != 'quiet') {
-				push(status_data.errors, { code: 'errorDNSReload', info: '' });
-				output.error("Resolver 'smartdns' not found");
+			if (env.check_dnsmasq_feature('idn')) cfg.allow_non_ascii = false;
+			break;
+		case 'smartdns':
+			if (!env.check_smartdns()) {
+				if (param != 'quiet') {
+					push(status_data.errors, { code: 'errorDNSReload', info: '' });
+					output.error("Resolver 'smartdns' not found");
+				}
+				return false;
 			}
-			return false;
-		}
-		cfg.allow_non_ascii = false;
-		break;
-	case 'unbound':
-		if (!check_unbound()) {
-			if (param != 'quiet') {
-				push(status_data.errors, { code: 'errorDNSReload', info: '' });
-				output.error("Resolver 'unbound' not found");
+			cfg.allow_non_ascii = false;
+			break;
+		case 'unbound':
+			if (!env.check_unbound()) {
+				if (param != 'quiet') {
+					push(status_data.errors, { code: 'errorDNSReload', info: '' });
+					output.error("Resolver 'unbound' not found");
+				}
+				return false;
 			}
-			return false;
+			cfg.allow_non_ascii = true;
+			break;
 		}
-		cfg.allow_non_ascii = true;
-		break;
-	}
 
-	// Check specific cfg.dns mode support
-	switch (cfg.dns) {
-	case 'dnsmasq.ipset':
-		if (!check_dnsmasq_feature('ipset')) {
-			if (param != 'quiet') push(status_data.errors, { code: 'errorNoDnsmasqIpset', info: '' });
-			cfg.dns = 'dnsmasq.servers';
+		// Check specific cfg.dns mode support
+		switch (cfg.dns) {
+		case 'dnsmasq.ipset':
+			if (!env.check_dnsmasq_feature('ipset')) {
+				if (param != 'quiet') push(status_data.errors, { code: 'errorNoDnsmasqIpset', info: '' });
+				cfg.dns = 'dnsmasq.servers';
+			}
+			if (!env.check_ipset()) {
+				if (param != 'quiet') push(status_data.errors, { code: 'errorNoIpset', info: '' });
+				cfg.dns = 'dnsmasq.servers';
+			}
+			break;
+		case 'dnsmasq.nftset':
+			if (!env.check_dnsmasq_feature('nftset')) {
+				if (param != 'quiet') push(status_data.errors, { code: 'errorNoDnsmasqNftset', info: '' });
+				cfg.dns = 'dnsmasq.servers';
+			}
+			if (!env.check_nft()) {
+				if (param != 'quiet') push(status_data.errors, { code: 'errorNoNft', info: '' });
+				cfg.dns = 'dnsmasq.servers';
+			}
+			break;
+		case 'smartdns.ipset':
+			if (!env.check_ipset()) {
+				if (param != 'quiet') push(status_data.errors, { code: 'errorNoIpset', info: '' });
+				cfg.dns = 'smartdns.domainset';
+			}
+			break;
+		case 'smartdns.nftset':
+			if (!env.check_nft()) {
+				if (param != 'quiet') push(status_data.errors, { code: 'errorNoNft', info: '' });
+				cfg.dns = 'smartdns.domainset';
+			}
+			break;
 		}
-		if (!check_ipset()) {
-			if (param != 'quiet') push(status_data.errors, { code: 'errorNoIpset', info: '' });
-			cfg.dns = 'dnsmasq.servers';
-		}
-		break;
-	case 'dnsmasq.nftset':
-		if (!check_dnsmasq_feature('nftset')) {
-			if (param != 'quiet') push(status_data.errors, { code: 'errorNoDnsmasqNftset', info: '' });
-			cfg.dns = 'dnsmasq.servers';
-		}
-		if (!check_nft()) {
-			if (param != 'quiet') push(status_data.errors, { code: 'errorNoNft', info: '' });
-			cfg.dns = 'dnsmasq.servers';
-		}
-		break;
-	case 'smartdns.ipset':
-		if (!check_ipset()) {
-			if (param != 'quiet') push(status_data.errors, { code: 'errorNoIpset', info: '' });
-			cfg.dns = 'smartdns.domainset';
-		}
-		break;
-	case 'smartdns.nftset':
-		if (!check_nft()) {
-			if (param != 'quiet') push(status_data.errors, { code: 'errorNoNft', info: '' });
-			cfg.dns = 'smartdns.domainset';
-		}
-		break;
-	}
 
-	if (cfg.dnsmasq_config_file_url) {
-		cfg.update_config_sizes = false;
-		if (cfg.dns != 'dnsmasq.conf') {
-			cfg.dns = 'dnsmasq.conf';
-			if (param != 'quiet')
-				push(status_data.warnings, { code: 'warningExternalDnsmasqConfig', info: '' });
+		if (cfg.dnsmasq_config_file_url) {
+			cfg.update_config_sizes = false;
+			if (cfg.dns != 'dnsmasq.conf') {
+				cfg.dns = 'dnsmasq.conf';
+				if (param != 'quiet')
+					push(status_data.warnings, { code: 'warningExternalDnsmasqConfig', info: '' });
+			}
 		}
-	}
 
-	// Clean up files for non-active cfg.dns modes
-	for (let mode in dns_modes) {
-		if (mode == cfg.dns) continue;
-		let dc = dns_modes[mode];
-		unlink(dc.cache);
-		unlink(cfg.compressed_cache_dir + '/' + dc.gzip);
-		if (dc.file != pkg.dnsmasq_file) unlink(dc.file);
-		if (dc.config) unlink(dc.config);
-	}
+		// Re-sync dns_output after any cfg.dns fallback
+		dns_set_output_values(cfg.dns);
 
-	// Create directories
-	let dirs = [pkg.run_file, pkg.status_file, dns_output.file, dns_output.cache, dns_output.gzip, dns_output.config];
-	for (let f in dirs) {
-		if (!f) continue;
-		let dir = dirname(f);
-		if (!mkdir_p(dir)) {
-			if (param != 'quiet')
-				push(status_data.errors, { code: 'errorOutputDirCreate', info: f });
+		// Clean up files for non-active cfg.dns modes
+		for (let mode in dns_modes) {
+			if (mode == cfg.dns) continue;
+			let dc = dns_modes[mode];
+			unlink(dc.cache);
+			unlink(cfg.compressed_cache_dir + '/' + dc.gzip);
+			if (dc.file != pkg.dnsmasq_file) unlink(dc.file);
+			if (dc.config) unlink(dc.config);
 		}
-	}
 
-	if (is_present('gawk')) state.awk_cmd = 'gawk';
-	if (!is_present('/usr/libexec/grep-gnu') || !is_present('/usr/libexec/sed-gnu') ||
-		!is_present('/usr/libexec/sort-coreutils') || !is_present('gawk')) {
-		let s = '';
-		if (!is_present('gawk')) { push(status_data.warnings, { code: 'warningMissingRecommendedPackages', info: 'gawk' }); s += (s ? ' ' : '') + 'gawk'; }
-		if (!is_present('/usr/libexec/grep-gnu')) { push(status_data.warnings, { code: 'warningMissingRecommendedPackages', info: 'grep' }); s += (s ? ' ' : '') + 'grep'; }
-		if (!is_present('/usr/libexec/sed-gnu')) { push(status_data.warnings, { code: 'warningMissingRecommendedPackages', info: 'sed' }); s += (s ? ' ' : '') + 'sed'; }
-		if (!is_present('/usr/libexec/sort-coreutils')) { push(status_data.warnings, { code: 'warningMissingRecommendedPackages', info: 'coreutils-sort' }); s += (s ? ' ' : '') + 'coreutils-sort'; }
-		if (param != 'quiet') {
+		return true;
+	};
+
+	let _setup_directories = function() {
+		let dirs = [pkg.run_file, pkg.status_file, dns_output.file, dns_output.cache, dns_output.gzip, dns_output.config];
+		for (let f in dirs) {
+			if (!f) continue;
+			let dir = dirname(f);
+			if (!mkdir_p(dir)) {
+				if (param != 'quiet')
+					push(status_data.errors, { code: 'errorOutputDirCreate', info: f });
+			}
+		}
+	};
+
+	let _check_recommended_packages = function() {
+		let bins = {
+			gawk:  ['gawk', 'gawk'],
+			grep:  ['/usr/libexec/grep-gnu', 'grep'],
+			sed:   ['/usr/libexec/sed-gnu', 'sed'],
+			sort:  ['/usr/libexec/sort-coreutils', 'coreutils-sort'],
+		};
+		let missing = [];
+		for (let key in bins) {
+			if (!is_present(bins[key][0])) {
+				push(status_data.warnings, { code: 'warningMissingRecommendedPackages', info: bins[key][1] });
+				push(missing, bins[key][1]);
+			}
+		}
+		if (length(missing) && param != 'quiet') {
 			output.warning(get_text('warningMissingRecommendedPackages') + ', install them by running:');
-			output.print('opkg update; opkg --force-overwrite install ' + s + ';');
+			output.print('opkg update; opkg --force-overwrite install ' + join(' ', missing) + ';');
 		}
+	};
+
+	let _check_wan_gateway = function() {
+		let ub = connect();
+		if (!ub) return false;
+		let dump = ub.call('network.interface', 'dump');
+		ub.disconnect();
+		if (!dump?.interface) return false;
+		for (let iface in dump.interface) {
+			for (let r in (iface.route || []))
+				if (r.target == '0.0.0.0') return true;
+		}
+		return false;
+	};
+
+	// ── param-driven branches ───────────────────────────────────────
+
+	switch (param) {
+	case 'on_boot':
+		// Minimal: just config + dns_output (for cache restore)
+		break;
+
+	case 'on_start':
+	case 'download':
+	case 'reload':
+	case 'restart':
+	default:
+		// Full pipeline
+		env.detect();
+		if (!_check_resolver_environment()) return false;
+		_setup_directories();
+		_check_recommended_packages();
+		if (!_check_wan_gateway()) {
+			push(status_data.errors, { code: 'errorNoWanGateway', info: '' });
+			output.error(get_text('errorNoWanGateway'));
+			return false;
+		}
+		append_urls();
+		if (cfg.led) cfg.led = '/sys/class/leds/' + cfg.led;
+		break;
+
+	case 'quiet':
+		env.detect();
+		_check_resolver_environment();
+		break;
+
+	case 'rpcd':
+		env.detect();
+		break;
 	}
 
-	load_dl_command();
-	if (cfg.led) cfg.led = '/sys/class/leds/' + cfg.led;
-	append_urls();
-	state.environment_loaded = true;
-
-	if (adb_file('test_cache')) return true;
-	if (adb_file('test_gzip')) return true;
-	if (param == 'on_boot')
-		return load_network(param);
+	state.load_environment_flag = true;
 	return true;
 }
 
@@ -1169,16 +1196,16 @@ function _dnsmasq_instance_get_confdir(inst) {
 	// Get the UCI section name for this instance
 	let uci_name = uci('dhcp').get('dhcp', inst, '.name') || inst;
 	// Cache dnsmasq service info via ubus
-	if (!state.dnsmasq_ubus) {
+	if (!env.dnsmasq_ubus) {
 		let ub = connect();
 		if (ub) {
-			state.dnsmasq_ubus = ub.call('service', 'list', { name: 'dnsmasq' });
+			env.dnsmasq_ubus = ub.call('service', 'list', { name: 'dnsmasq' });
 			ub.disconnect();
 		}
 	}
 	// Extract the -C config file from the dnsmasq instance command line
 	let cfg_file = null;
-	let cmd_arr = state.dnsmasq_ubus?.dnsmasq?.instances?.[uci_name]?.command;
+	let cmd_arr = env.dnsmasq_ubus?.dnsmasq?.instances?.[uci_name]?.command;
 	if (type(cmd_arr) == 'array') {
 		for (let i = 0; i < length(cmd_arr); i++)
 			if (cmd_arr[i] == '-C' && i + 1 < length(cmd_arr)) { cfg_file = cmd_arr[i + 1]; break; }
@@ -1552,7 +1579,7 @@ function process_file_url(section, url_override, action_override) {
 	case 'file': type_name = 'File'; d_tmp = tmp.b; break;
 	}
 
-	if (is_https_url(url) && !state.ssl_supported) {
+	if (is_https_url(url) && !env.get_downloader().ssl_supported) {
 		output.info(sym.fail[0]);
 		output.verbose('[ DL ] ' + type_name + ' ' + label + ' ' + sym.fail[1] + '\\n');
 		push(status_data.errors, { code: 'errorNoSSLSupport', info: name || url });
@@ -1918,8 +1945,7 @@ function download_lists() {
 
 function adb_config_update(param) {
 	param = param || 'quiet';
-	load();
-	load_dl_command();
+	load_package_config();
 	let label = replace('' + cfg.config_update_url, /^[a-z]+:\/\//, '');
 	label = replace(label, /\/.*$/, '');
 	if (!cfg.enabled) return;
@@ -2085,7 +2111,7 @@ function emit_procd_shell(data) {
 // ── status_service ──────────────────────────────────────────────────
 
 function status_service(param) {
-	load();
+	load_package_config();
 	// When called from start() the in-memory status_data is already correct;
 	// reloading from file would overwrite it with stale data.
 	if (param != 'on_start_success' && param != 'on_start_failure')
@@ -2130,12 +2156,13 @@ function start(args) {
 	status_json('reset');
 
 	if (param == 'on_boot') {
+		load_environment(param);  // on_boot: just loads config + dns_output
 		if (!adb_file('test_gzip') && !adb_file('test_cache'))
 			return null;
 	}
 
 	adb_config_update(param);
-	if (!load_environment(param)) return null;
+	if (!load_environment(param)) return null;  // memoized if already called above
 
 	let action = adb_config_cache('get', 'trigger_service');
 	state.fw4_restart = adb_config_cache('get', 'trigger_fw4');
@@ -2270,7 +2297,7 @@ function dl() {
 // ── stop ────────────────────────────────────────────────────────────
 
 function stop() {
-	load();
+	load_package_config();
 	if (adb_file('test')) {
 		output.info('Stopping ' + pkg.service_name + '... ');
 		output.verbose('[STOP] Stopping ' + pkg.service_name + '... ');
@@ -2295,7 +2322,7 @@ function stop() {
 // ── Extra Commands ──────────────────────────────────────────────────
 
 function allow(string) {
-	load();
+	load_package_config();
 	if (!adb_file('test')) {
 		output.print("No block-list ('" + dns_output.file + "') found.\\n");
 		return;
@@ -2365,7 +2392,7 @@ function allow(string) {
 }
 
 function check(param) {
-	load();
+	load_package_config();
 	if (!adb_file('test')) {
 		output.print("No block-list ('" + dns_output.file + "') found.\\n");
 		return;
@@ -2395,7 +2422,7 @@ function check(param) {
 }
 
 function check_tld() {
-	load();
+	load_package_config();
 	if (!adb_file('test')) {
 		output.print("No block-list ('" + dns_output.file + "') found.\\n");
 		return;
@@ -2418,7 +2445,7 @@ function check_tld() {
 }
 
 function check_leading_dot() {
-	load();
+	load_package_config();
 	if (!adb_file('test')) {
 		output.print("No block-list ('" + dns_output.file + "') found.\\n");
 		return;
@@ -2448,8 +2475,7 @@ function check_leading_dot() {
 }
 
 function check_lists(param) {
-	load();
-	load_dl_command();
+	load_package_config();
 	if (!param) {
 		output.print("Usage: /etc/init.d/" + pkg.name + " check_lists 'domain' ...\\n");
 		return;
@@ -2464,7 +2490,7 @@ function check_lists(param) {
 		output.info('Checking ' + name + ': ');
 		output.verbose('[ DL ] ' + name + ' ');
 
-		if (is_https_url(url) && !state.ssl_supported) {
+		if (is_https_url(url) && !env.get_downloader().ssl_supported) {
 			output.failn();
 			return;
 		}
@@ -2495,7 +2521,7 @@ function check_lists(param) {
 }
 
 function killcache() {
-	load();
+	load_package_config();
 	for (let mode in dns_modes) {
 		let dc = dns_modes[mode];
 		unlink(dc.cache);
@@ -2505,7 +2531,7 @@ function killcache() {
 }
 
 function pause(timeout) {
-	load();
+	load_package_config();
 	timeout = timeout || cfg.pause_timeout || '20';
 	stop();
 	output.info('Sleeping for ' + timeout + ' seconds... ');
@@ -2518,7 +2544,7 @@ function pause(timeout) {
 }
 
 function show_blocklist() {
-	load();
+	load_package_config();
 	if (dns_output.file && dns_output.parse_filter)
 		system(sprintf("sed '%s' %s", dns_output.parse_filter, shell_quote(dns_output.file)));
 	else if (dns_output.file)
@@ -2526,8 +2552,7 @@ function show_blocklist() {
 }
 
 function sizes() {
-	load();
-	load_dl_command();
+	load_package_config();
 	uci(pkg.name).foreach(pkg.name, 'file_url', (s) => {
 		let size = get_url_filesize(s.url);
 		output.print((s.name || s.url) + (size ? ': ' + size : '') + ' ');
@@ -2546,7 +2571,7 @@ function sizes() {
 // ── service_started (called from init script) ──────────────────────
 
 function service_started(param) {
-	load();
+	load_package_config();
 	status_json('load');
 	if (cfg.compressed_cache && !adb_file('test_gzip') && adb_file('test')) {
 		let start_time = time();
@@ -2572,7 +2597,7 @@ function service_started(param) {
 // ── get_network_trigger_info (for service_triggers) ─────────────────
 
 function get_network_trigger_info() {
-	load();
+	load_package_config();
 	let result = { procd_trigger_wan6: cfg.procd_trigger_wan6 };
 	return result;
 }
@@ -2581,7 +2606,7 @@ function get_network_trigger_info() {
 
 function get_init_status(name) {
 	name = name || pkg.name;
-	load();
+	load_environment('rpcd');
 	status_json('load');
 	let status = status_data.status;
 	let message = status_data.message;
@@ -2654,17 +2679,18 @@ function get_init_list(name) {
 
 function get_platform_support(name) {
 	name = name || pkg.name;
+	env.detect();
 	let result = {};
 	result[name] = {
-		ipset_installed: check_ipset(),
-		nft_installed: check_nft(),
-		dnsmasq_installed: is_present('dnsmasq'),
-		dnsmasq_ipset_support: check_dnsmasq_ipset(),
-		dnsmasq_nftset_support: check_dnsmasq_nftset(),
-		smartdns_installed: is_present('smartdns'),
-		smartdns_ipset_support: is_present('smartdns') && check_ipset(),
-		smartdns_nftset_support: is_present('smartdns') && check_nft(),
-		unbound_installed: is_present('unbound'),
+		ipset_installed: env.ipset_supported,
+		nft_installed: env.nft_installed,
+		dnsmasq_installed: env.dnsmasq_installed,
+		dnsmasq_ipset_support: env.check_dnsmasq_ipset(),
+		dnsmasq_nftset_support: env.check_dnsmasq_nftset(),
+		smartdns_installed: env.smartdns_installed,
+		smartdns_ipset_support: env.smartdns_installed && env.ipset_supported,
+		smartdns_nftset_support: env.smartdns_installed && env.nft_installed,
+		unbound_installed: env.unbound_installed,
 		leds: length(lsdir('/sys/class/leds') || []) > 0,
 	};
 	return result;
@@ -2672,8 +2698,7 @@ function get_platform_support(name) {
 
 function get_file_url_filesizes(name) {
 	name = name || pkg.name;
-	load();
-	load_dl_command();
+	load_environment('rpcd');
 
 	let files = [];
 	uci(pkg.name).foreach(pkg.name, 'file_url', (s) => {
@@ -2699,7 +2724,7 @@ export default {
 	pkg,
 
 	// Core lifecycle
-	load,
+	load_package_config,
 	start,
 	stop,
 	status_service,

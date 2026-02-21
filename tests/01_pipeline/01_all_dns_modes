@@ -42,10 +42,11 @@ let results = [];
 
 for (let mode in modes) {
 	// Reset module state for each mode
-	ti.state.config_loaded = false;
-	ti.state.environment_loaded = false;
-	ti.state.dnsmasq_features = null;
-	ti.state.dnsmasq_ubus = null;
+	ti.state.load_package_config_flag = false;
+	ti.state.load_environment_flag = false;
+	ti.env.dnsmasq_features = '';
+	ti.env._detected = false;
+	ti.env.dnsmasq_ubus = null;
 	ti.status_data.errors = [];
 	ti.status_data.warnings = [];
 	ti.status_data.status = '';
@@ -53,7 +54,7 @@ for (let mode in modes) {
 	ti.status_data.stats = '';
 
 	// Load config from mock UCI
-	adb.load();
+	adb.load_package_config();
 
 	// Override DNS mode via set_cfg (load() reassigns cfg, so direct ref is stale)
 	ti.set_cfg('dns', mode);
@@ -64,9 +65,6 @@ for (let mode in modes) {
 	ti.set_cfg('config_update_enabled', false);
 	ti.set_cfg('update_config_sizes', false);
 	ti.dns_set_output_values(mode);
-
-	// Set up download command
-	adb.load_dl_command();
 
 	// Collect file_url sections
 	ti.append_urls();

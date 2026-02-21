@@ -5,7 +5,7 @@ import adb from 'adblock-fast';
 import { readfile } from 'fs';
 let ti = adb._test_internals;
 
-adb.load();
+adb.load_package_config();
 ti.set_cfg('dns', 'dnsmasq.servers');
 ti.set_cfg('dnsmasq_sanity_check', false);
 ti.set_cfg('dnsmasq_validity_check', false);
@@ -14,7 +14,6 @@ ti.set_cfg('config_update_enabled', false);
 ti.set_cfg('update_config_sizes', false);
 ti.set_cfg('blocked_domain', 'custom-block-1.example.net custom-block-2.example.net');
 ti.dns_set_output_values('dnsmasq.servers');
-adb.load_dl_command();
 ti.append_urls();
 
 let ok = ti.download_lists();

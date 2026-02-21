@@ -5,7 +5,7 @@ import adb from 'adblock-fast';
 import { writefile, mkdir } from 'fs';
 let ti = adb._test_internals;
 
-adb.load();
+adb.load_package_config();
 
 let test_dir = '' + TESTDIR + '/fmt_test';
 mkdir(test_dir);
