@@ -4,7 +4,6 @@
 
 # shellcheck disable=SC2034
 START=20
-# shellcheck disable=SC2034
 USE_PROCD=1
 LC_ALL=C
 
@@ -24,6 +23,8 @@ fi
 
 readonly packageName='adblock-fast'
 readonly _ucode="ucode -S -L /lib/${packageName} /lib/${packageName}/cli.uc --"
+_procd_svc_data=
+_fw4_restart=
 
 # shellcheck disable=SC1091
 . "${IPKG_INSTROOT}/lib/functions.sh"
@@ -31,36 +32,19 @@ readonly _ucode="ucode -S -L /lib/${packageName} /lib/${packageName}/cli.uc --"
 . "${IPKG_INSTROOT}/lib/functions/network.sh"
 
 boot() { rc_procd start_service 'on_boot' && service_started 'on_boot'; }
-# shellcheck disable=SC2120
 start_service() {
 	local param="${1:-on_start}"
-	local result
-
-	# Call ucode to do all work; it returns json_add_* shell commands
-	result="$($_ucode start "$param")"
-	# shellcheck disable=SC2181
-	[ $? -eq 0 ] || return 1
-	[ -n "$result" ] || return 0
-
-	procd_open_instance 'main'
-	procd_set_param command /bin/true
-	procd_set_param stdout 1
-	procd_set_param stderr 1
-	procd_open_data
-	eval "$result"
-	procd_close_data
-	procd_close_instance
-	return 0
+	_procd_svc_data="$($_ucode start "$param")"
 }
-stop_service() { $_ucode stop; }
+service_data() { [ -n "$_procd_svc_data" ] && eval "$_procd_svc_data"; }
+stop_service() { eval "$($_ucode stop)"; }
 reload_service() { rc_procd start_service 'reload'; }
 restart_service() { rc_procd start_service 'restart'; }
 status_service() { $_ucode status "$@"; }
-service_stopped() { $_ucode is_fw4_restart_needed && procd_set_config_changed firewall; }
-service_started() { $_ucode service_started "$@"; $_ucode is_fw4_restart_needed && procd_set_config_changed firewall; }
+service_stopped() { [ "$_fw4_restart" = 1 ] && procd_set_config_changed firewall; }
+service_started() { [ "$_fw4_restart" = 1 ] && procd_set_config_changed firewall; }
 service_triggers() {
 	local wan wan6 procd_trigger_wan6 i
-
 	if [ ! -s "/dev/shm/${packageName}" ]; then
 		procd_add_raw_trigger "interface.*.up" 5000 "/etc/init.d/${packageName}" start
 	else		
@@ -87,22 +71,7 @@ check()             { $_ucode check "$@"; }
 check_tld()         { $_ucode check_tld "$@"; }
 check_leading_dot() { $_ucode check_leading_dot "$@"; }
 check_lists()       { $_ucode check_lists "$@"; }
-dl() {
-	local result
-	result="$($_ucode dl)"
-	# shellcheck disable=SC2181
-	[ $? -eq 0 ] || return 1
-	[ -n "$result" ] || return 0
-	procd_open_instance 'main'
-	procd_set_param command /bin/true
-	procd_set_param stdout 1
-	procd_set_param stderr 1
-	procd_open_data
-	eval "$result"
-	procd_close_data
-	procd_close_instance
-	service_started
-}
+dl()                { rc_procd start_service 'download' && service_started; }
 killcache()         { $_ucode killcache "$@"; }
 pause()             { $_ucode pause "$@"; }
 show_blocklist()    { $_ucode show_blocklist "$@"; }
@@ -120,6 +89,7 @@ load_validate_file_url_section() {
 	;
 }
 
+# shellcheck disable=SC2120
 load_validate_config() {
 	uci_load_validate "$packageName" "$packageName" "$1" "${2}${3:+ ${3}}" \
 		'enabled:bool:0' \

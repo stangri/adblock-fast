@@ -19,7 +19,9 @@ case 'start':
 	break;
 
 case 'stop':
-	adb.stop();
+	let stop_result = adb.stop();
+	if (stop_result)
+		print(adb.emit_procd_shell(stop_result));
 	break;
 
 case 'status':
@@ -72,10 +74,6 @@ case 'version':
 	print(adb.pkg.version + '\n');
 	break;
 
-case 'is_fw4_restart_needed':
-	exit(adb.is_fw4_restart_needed() ? 0 : 1);
-	break;
-
 case 'get_wan_interfaces':
 	let info = adb.get_network_trigger_info();
 	if (info)
@@ -89,10 +87,6 @@ case 'adb_config_update':
 case 'load_environment':
 	let env_ok = adb.env.load(ARGV[0], ARGV[1]);
 	exit(env_ok ? 0 : 1);
-	break;
-
-case 'service_started':
-	adb.service_started(ARGV[0]);
 	break;
 
 default:

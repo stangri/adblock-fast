@@ -19,7 +19,6 @@ const pkg = {
 	config_file: '/etc/config/adblock-fast',
 	dnsmasq_file: '/var/run/adblock-fast/adblock-fast.dnsmasq',
 	run_file: '/dev/shm/adblock-fast',
-	status_file: '/dev/shm/adblock-fast.status.json',
 	triggers: {
 		reload: 'parallel_downloads debug download_timeout allowed_domain blocked_domain allowed_url blocked_url dns config_update_enabled config_update_url dnsmasq_config_file_url curl_additional_param curl_max_file_size curl_retry',
 		restart: 'compressed_cache compressed_cache_dir force_dns led force_dns_port',
@@ -538,48 +537,45 @@ let status_data = {
 	warnings: [],
 };
 
-function status_json(action) {
-	switch (action) {
-	case 'load':
-		let content = readfile(pkg.status_file);
-		if (!content) return;
-		try {
-			let obj = json('' + content);
-			if (obj?.data) {
-				status_data.status = obj.data.status || '';
-				status_data.message = obj.data.message || '';
-				status_data.stats = obj.data.stats || '';
-				status_data.errors = obj.data.errors || [];
-				status_data.warnings = obj.data.warnings || [];
-			}
-		} catch(e) {}
-		break;
-	case 'dump':
-		let dump_obj = {
-			data: {
-				version: pkg.version,
-				packageCompat: pkg.compat,
-				status: status_data.status,
-				message: status_data.message,
-				stats: status_data.stats,
-				errors: status_data.errors,
-				warnings: status_data.warnings,
-			}
-		};
-		let dir = dirname(pkg.status_file);
-		mkdir_p(dir);
-		let tmp_path = pkg.status_file + '.tmp';
-		writefile(tmp_path, sprintf('%J', dump_obj) + '\n');
-		rename(tmp_path, pkg.status_file);
-		break;
-	case 'reset':
-		status_data.status = '';
-		status_data.message = '';
-		status_data.stats = '';
-		status_data.errors = [];
-		status_data.warnings = [];
-		break;
-	}
+function _load_status_from_ubus() {
+	let conn = connect();
+	if (!conn) return;
+	let svc = conn.call('service', 'list', { name: pkg.name });
+	conn.disconnect();
+	let data = svc?.[pkg.name]?.data;
+	if (!data) return;
+	status_data.status = data.status || '';
+	status_data.message = data.message || '';
+	status_data.stats = data.stats || '';
+	status_data.errors = data.errors || [];
+	status_data.warnings = data.warnings || [];
+}
+
+function _update_ubus_status() {
+	let conn = connect();
+	if (!conn) return;
+	let svc = conn.call('service', 'list', { name: pkg.name });
+	let data = svc?.[pkg.name]?.data;
+	if (!data) { conn.disconnect(); return; }
+	data.status = status_data.status;
+	data.message = status_data.message;
+	data.stats = status_data.stats;
+	data.errors = [];
+	for (let e in status_data.errors)
+		push(data.errors, { code: e.code, info: e.info });
+	data.warnings = [];
+	for (let e in status_data.warnings)
+		push(data.warnings, { code: e.code, info: e.info });
+	conn.call('service', 'set_data', { name: pkg.name, data: data });
+	conn.disconnect();
+}
+
+function _status_reset() {
+	status_data.status = '';
+	status_data.message = '';
+	status_data.stats = '';
+	status_data.errors = [];
+	status_data.warnings = [];
 }
 
 // ── get_text ────────────────────────────────────────────────────────
@@ -1106,7 +1102,7 @@ env.load = function(param, validation_result) {
 	};
 
 	let _setup_directories = function() {
-		let dirs = [pkg.run_file, pkg.status_file, dns_output.file, dns_output.cache, dns_output.gzip, dns_output.config];
+		let dirs = [pkg.run_file, dns_output.file, dns_output.cache, dns_output.gzip, dns_output.config];
 		for (let f in dirs) {
 			if (!f) continue;
 			let dir = dirname(f);
@@ -2075,6 +2071,9 @@ function _build_procd_data() {
 		}
 	}
 
+	// fw4 restart flag (consumed by init script as shell variable)
+	result.fw4_restart_needed = is_fw4_restart_needed();
+
 	// ipset/nftset firewall rules
 	switch (cfg.dns) {
 	case 'dnsmasq.ipset':
@@ -2112,6 +2111,13 @@ function _build_procd_data() {
 function emit_procd_shell(data) {
 	if (!data) return '';
 	let lines = [];
+
+	if (data.fw4_restart_needed)
+		push(lines, '_fw4_restart=1');
+
+	// Minimal data (e.g. from stop) — only emit shell variables
+	if (!data.version)
+		return join('\n', lines) + '\n';
 
 	push(lines, 'json_add_string version ' + shell_quote(data.version || ''));
 	push(lines, 'json_add_string status ' + shell_quote(data.status || ''));
@@ -2201,9 +2207,9 @@ function emit_procd_shell(data) {
 function status_service(param) {
 	env.load_config();
 	// When called from start() the in-memory status_data is already correct;
-	// reloading from file would overwrite it with stale data.
+	// reloading from ubus would overwrite it with stale data.
 	if (param != 'on_start_success' && param != 'on_start_failure')
-		status_json('load');
+		_load_status_from_ubus();
 	let status = status_data.status;
 	let message = status_data.message;
 	let stats = status_data.stats;
@@ -2238,10 +2244,10 @@ function status_service(param) {
 function start(args) {
 	let param = (args && args[0]) || 'on_start';
 
-	status_json('load');
+	_load_status_from_ubus();
 	let prev_status = status_data.status;
 	let prev_errors = length(status_data.errors) > 0;
-	status_json('reset');
+	_status_reset();
 
 	if (param == 'on_boot') {
 		env.load(param);  // on_boot: just loads config + dns_output
@@ -2369,10 +2375,28 @@ function start(args) {
 		resolver('revert');
 	}
 
+	// Compressed cache: create or remove
+	if (cfg.compressed_cache && !adb_file('test_gzip') && adb_file('test')) {
+		let start_time = time();
+		let step_title = 'Creating ' + cfg.dns + ' compressed cache';
+		output.info(step_title + ' ');
+		output.verbose('[PROC] ' + step_title + ' ');
+		status_data.message = get_text('statusProcessing') + ': ' + step_title;
+		if (adb_file('create_gzip'))
+			output.okn();
+		else {
+			output.failn();
+			push(status_data.errors, { code: 'errorCreatingCompressedCache', info: '' });
+		}
+		let end_time = time();
+		let elapsed = end_time - start_time;
+		logger_debug('[PERF-DEBUG] ' + step_title + ' took ' + elapsed + 's');
+	} else {
+		adb_file('remove_gzip');
+	}
+
 	adb_config_cache('create');
 
-	// Build result object for procd_open_data
-	status_json('dump');
 	return _build_procd_data();
 }
 
@@ -2404,7 +2428,7 @@ function stop() {
 			output.error(get_text('errorStopping'));
 		}
 	}
-	status_json('dump');
+	return { fw4_restart_needed: is_fw4_restart_needed() };
 }
 
 // ── Extra Commands ──────────────────────────────────────────────────
@@ -2475,7 +2499,7 @@ function allow(string) {
 	} else {
 		output.fail();
 	}
-	status_json('dump');
+	_update_ubus_status();
 	output.info('\\n');
 }
 
@@ -2628,7 +2652,14 @@ function pause(timeout) {
 		output.okn();
 	else
 		output.failn();
-	start(['on_pause']);
+	let result = start(['on_pause']);
+	if (result) {
+		let conn = connect();
+		if (conn) {
+			conn.call('service', 'set_data', { name: pkg.name, data: result });
+			conn.disconnect();
+		}
+	}
 }
 
 function show_blocklist() {
@@ -2656,32 +2687,6 @@ function sizes() {
 		uci(pkg.name).commit(pkg.name);
 }
 
-// ── service_started (called from init script) ──────────────────────
-
-function service_started(param) {
-	env.load_config();
-	status_json('load');
-	if (cfg.compressed_cache && !adb_file('test_gzip') && adb_file('test')) {
-		let start_time = time();
-		let step_title = 'Creating ' + cfg.dns + ' compressed cache';
-		output.info(step_title + ' ');
-		output.verbose('[PROC] ' + step_title + ' ');
-		status_data.message = get_text('statusProcessing') + ': ' + step_title;
-		if (adb_file('create_gzip'))
-			output.okn();
-		else {
-			output.failn();
-			push(status_data.errors, { code: 'errorCreatingCompressedCache', info: '' });
-		}
-		let end_time = time();
-		let elapsed = end_time - start_time;
-		logger_debug('[PERF-DEBUG] ' + step_title + ' took ' + elapsed + 's');
-	} else {
-		adb_file('remove_gzip');
-	}
-	status_json('dump');
-}
-
 // ── get_network_trigger_info (for service_triggers) ─────────────────
 
 function get_network_trigger_info() {
@@ -2700,7 +2705,7 @@ function get_init_status(name) {
 	let conn = connect();
 	let ubus_data = conn ? conn.call('service', 'list', { name: pkg.name }) : null;
 	if (conn) conn.disconnect();
-	let svc_data = ubus_data?.[pkg.name]?.instances?.main?.data;
+	let svc_data = ubus_data?.[pkg.name]?.data;
 
 	// Gzip path (for live file-existence checks)
 	let gzip_path = svc_data?.outputGzip || '';
@@ -2836,10 +2841,8 @@ export default {
 	get_file_url_filesizes,
 
 	// init script helpers
-	is_fw4_restart_needed,
 	get_network_trigger_info,
 	dl,
-	service_started,
 	emit_procd_shell,
 	process_file_url,
 };
