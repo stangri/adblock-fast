@@ -504,7 +504,23 @@ let _cursor = null;
 let _cursor_loaded = {};
 
 function uci(config, reload) {
-	if (!_cursor) _cursor = cursor();
+	if (!_cursor) {
+		_cursor = cursor();
+		if (!_cursor.list_remove) {
+			_cursor.list_remove = function(cfg, section, option, value) {
+				let list = this.get(cfg, section, option);
+				if (type(list) == 'array') {
+					this.delete(cfg, section, option);
+					for (let item in list)
+						if (item != value)
+							this.add_list(cfg, section, option, item);
+				}
+				else if (list == value) {
+					this.delete(cfg, section, option);
+				}
+			};
+		}
+	}
 	if (!_cursor_loaded[config] || reload) {
 		_cursor.load(config);
 		_cursor_loaded[config] = true;
