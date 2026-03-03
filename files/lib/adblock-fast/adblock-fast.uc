@@ -2748,6 +2748,7 @@ function get_init_status(name) {
 		stats: svc_data?.stats || '',
 		entries: svc_data?.entries || 0,
 		dns: svc_data?.dns || cfg.dns,
+		pause_timeout: cfg.pause_timeout,
 		outputFile: svc_data?.outputFile || dns_output.file,
 		outputCache: svc_data?.outputCache || dns_output.cache,
 		outputGzip: gzip_path,
