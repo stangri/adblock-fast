@@ -2248,7 +2248,7 @@ function status_service(param) {
 		if (status) output.print(pkg.service_name + ' ' + status + '.\\n');
 	}
 
-	if (param == 'quiet' || param == 'on_start_success' || param == 'on_start_failure') return;
+	if (param == 'quiet') return;
 
 	for (let e in status_data.errors)
 		output.error(get_text(e.code, e.info));
