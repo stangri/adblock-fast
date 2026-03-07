@@ -2736,7 +2736,7 @@ function get_init_status(name) {
 		packageCompat: int(pkg.compat),
 
 		// Live-computed (cheap stat/uci checks)
-		enabled: service_enabled(pkg.name),
+		enabled: service_enabled(pkg.name) && !!cfg.enabled,
 		running: (stat(pkg.run_file)?.size > 0),
 		outputFileExists: (stat(svc_data?.outputFile || dns_output.file)?.size > 0) || false,
 		outputCacheExists: (stat(svc_data?.outputCache || dns_output.cache)?.size > 0) || false,
