@@ -2743,7 +2743,7 @@ function get_init_status(name) {
 		outputGzipExists: gzip_path ? (stat(gzip_path)?.size > 0) || false : false,
 
 		// From procd ubus data (pre-computed at start/dl time)
-		status: svc_data?.status || '',
+		status: svc_data?.status || 'statusStopped',
 		message: svc_data?.message || '',
 		stats: svc_data?.stats || '',
 		entries: svc_data?.entries || 0,
