@@ -470,8 +470,8 @@ function logger_debug(msg) {
 // ── Output Management ───────────────────────────────────────────────
 
 let _write = function(level, ...args) {
-	if (!cfg.verbosity)
-		cfg.verbosity = int(uci(pkg.name).get(pkg.name, 'config', 'verbosity') || '1');
+	if (cfg.verbosity == null)
+		cfg.verbosity = 1;
 	let msg = join('', args);
 	if (level != null && (cfg.verbosity & level) == 0) return;
 
