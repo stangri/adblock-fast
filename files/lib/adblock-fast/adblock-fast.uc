@@ -312,7 +312,7 @@ env.get_downloader = function() {
 	let command, flag, ssl_supported;
 	if (is_present('curl')) {
 		command = 'curl -f --silent --insecure';
-		if (cfg.curl_additional_param) command += ' ' + cfg.curl_additional_param;
+		if (cfg.curl_additional_param) command += ' ' + shell_quote(cfg.curl_additional_param);
 		if (cfg.curl_max_file_size) command += ' --max-filesize ' + cfg.curl_max_file_size;
 		if (cfg.curl_retry) command += ' --retry ' + cfg.curl_retry;
 		if (cfg.download_timeout) command += ' --connect-timeout ' + cfg.download_timeout;
