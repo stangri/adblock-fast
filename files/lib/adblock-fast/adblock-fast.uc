@@ -2736,7 +2736,7 @@ function get_init_status(name) {
 		packageCompat: int(pkg.compat),
 
 		// Live-computed (cheap stat/uci checks)
-		enabled: service_enabled(pkg.name) && !!cfg.enabled,
+		enabled: service_enabled(pkg.name) && uci(pkg.name, true).get(pkg.name, 'config', 'enabled') == '1',
 		running: (stat(pkg.run_file)?.size > 0),
 		outputFileExists: (stat(svc_data?.outputFile || dns_output.file)?.size > 0) || false,
 		outputCacheExists: (stat(svc_data?.outputCache || dns_output.cache)?.size > 0) || false,
@@ -2780,7 +2780,7 @@ function get_init_status(name) {
 function get_init_list(name) {
 	name = name || pkg.name;
 	let result = {};
-	let enabled_val = (uci(pkg.name).get(pkg.name, 'config', 'enabled') ?? '0');
+	let enabled_val = (uci(pkg.name, true).get(pkg.name, 'config', 'enabled') ?? '0');
 	result[name] = { enabled: (enabled_val == '1') };
 	return result;
 }
