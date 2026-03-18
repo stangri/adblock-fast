@@ -2717,7 +2717,7 @@ function get_network_trigger_info() {
 
 function get_init_status(name) {
 	name = name || pkg.name;
-	env.load('rpcd');
+	env.load_config();
 
 	// Read pre-computed data from procd service (like PBR)
 	let conn = connect();
@@ -2806,7 +2806,7 @@ function get_platform_support(name) {
 
 function get_file_url_filesizes(name) {
 	name = name || pkg.name;
-	env.load('rpcd');
+	env.load_config();
 
 	let files = [];
 	uci(pkg.name).foreach(pkg.name, 'file_url', (s) => {
