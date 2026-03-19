@@ -14,7 +14,7 @@ import { connect } from 'ubus';
 const pkg = {
 	name: 'adblock-fast',
 	version: 'dev-test',
-	compat: '13',
+	compat: '14',
 	memory_threshold: 33554432,
 	config_file: '/etc/config/adblock-fast',
 	dnsmasq_file: '/var/run/adblock-fast/adblock-fast.dnsmasq',
@@ -182,7 +182,6 @@ let env = {
 
 	// Guard flags
 	_detected: false,
-	_config_loaded: false,
 	_loaded: false,
 };
 
@@ -847,6 +846,7 @@ const config_schema = { // ucode-lsp disable
 	heartbeat_sleep_timeout: ['string', '10'],
 	led:                     ['string'],
 	pause_timeout:           ['string', '20'],
+	rpcd_token:              ['string'],
 	procd_boot_wan_timeout:  ['string', '60'],
 	// Integers
 	verbosity:               ['int', 2],
@@ -900,15 +900,11 @@ function parse_options(raw, schema) { // ucode-lsp disable
 // ── env.load_config ─────────────────────────────────────────────────
 
 env.load_config = function() {
-	if (env._config_loaded) return;
-	state.is_tty = system('[ -t 2 ]') == 0 ? true : false;
+	if (state.is_tty == null)
+		state.is_tty = system('[ -t 2 ]') == 0 ? true : false;
 	let raw = uci(pkg.name, true).get_all(pkg.name, 'config') || {};
 	cfg = parse_options(raw, config_schema);
 	env.dns_set_output_values(cfg.dns);
-	env._loaded = false;
-	env._detected = false;
-	env._dl_cache = null;
-	env._config_loaded = true;
 };
 
 // ── load_dl_command ─────────────────────────────────────────────────
