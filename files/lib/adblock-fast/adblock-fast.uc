@@ -2306,6 +2306,10 @@ function start(args) {
 		output.info('Starting ' + pkg.service_name + '...\\n');
 		output.verbose('[INIT] Starting ' + pkg.service_name + '...\\n');
 		status_data.status = 'statusStarting';
+		// Ensure cache/output directories exist (on_boot skips _setup_directories)
+		for (let f in [dns_output.file, dns_output.cache]) {
+			if (f) mkdir_p(dirname(f));
+		}
 		if (adb_file('test_gzip') && !adb_file('test_cache') && !adb_file('test')) {
 			output.info('Found compressed cache file, unpacking it ');
 			output.verbose('[INIT] Found compressed cache file, unpacking it ');
