@@ -2762,6 +2762,7 @@ function get_network_trigger_info() {
 function get_init_status(name) {
 	name = name || pkg.name;
 	env.load_config();
+	env.detect();
 
 	// Read pre-computed data from procd service (like PBR)
 	let conn = connect();
