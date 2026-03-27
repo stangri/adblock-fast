@@ -24,6 +24,7 @@ define Package/adblock-fast
 	+ucode-mod-fs \
 	+ucode-mod-uci \
 	+ucode-mod-ubus \
+	+ucode-mod-uloop \
 	+!BUSYBOX_DEFAULT_AWK:gawk \
 	+!BUSYBOX_DEFAULT_GREP:grep \
 	+!BUSYBOX_DEFAULT_SED:sed \

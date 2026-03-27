@@ -8,6 +8,7 @@
 import { readfile, writefile, popen, stat, unlink, rename, open, glob, mkdir, mkstemp, symlink, chmod, chown, realpath, lsdir, access, dirname } from 'fs';
 import { cursor } from 'uci';
 import { connect } from 'ubus';
+import * as uloop from 'uloop';
 
 // ── Constants ───────────────────────────────────────────────────────
 
@@ -1553,7 +1554,7 @@ function resolver(action) {
 
 // ── process_file_url ────────────────────────────────────────────────
 
-function process_file_url(section, url_override, action_override) {
+function process_file_url(section, url_override, action_override, predownloaded) {
 	let url, file_action, name, size_val;
 
 	if (section && !url_override) {
@@ -1585,15 +1586,22 @@ function process_file_url(section, url_override, action_override) {
 	case 'file': type_name = 'File'; d_tmp = tmp.b; break;
 	}
 
-	if (is_https_url(url) && !env.get_downloader().ssl_supported) {
+	if (!predownloaded && is_https_url(url) && !env.get_downloader().ssl_supported) {
 		output.info(sym.fail[0]);
 		output.verbose('[ DL ] ' + type_name + ' ' + label + ' ' + sym.fail[1] + '\\n');
 		push(status_data.errors, { code: 'errorNoSSLSupport', info: name || url });
 		return true;
 	}
 
-	let r_tmp = trim(cmd_output('mktemp -q -t "' + pkg.name + '_tmp.XXXXXXXX"'));
-	if (!url || !download(url, r_tmp) || !(stat(r_tmp)?.size > 0)) {
+	let r_tmp = predownloaded || trim(cmd_output('mktemp -q -t "' + pkg.name + '_tmp.XXXXXXXX"'));
+	if (predownloaded && !(stat(r_tmp)?.size > 0)) {
+		output.info(sym.fail[0]);
+		output.verbose('[ DL ] ' + type_name + ' ' + label + ' ' + sym.fail[1] + '\\n');
+		push(status_data.errors, { code: 'errorDownloadingList', info: name || url });
+		unlink(r_tmp);
+		return true;
+	}
+	if (!predownloaded && (!url || !download(url, r_tmp) || !(stat(r_tmp)?.size > 0))) {
 		output.info(sym.fail[0]);
 		output.verbose('[ DL ] ' + type_name + ' ' + label + ' ' + sym.fail[1] + '\\n');
 		push(status_data.errors, { code: 'errorDownloadingList', info: name || url });
@@ -1710,8 +1718,45 @@ function download_lists() {
 	let download_cfgs = [];
 	uci(pkg.name).foreach(pkg.name, 'file_url', (s) => push(download_cfgs, s['.name']));
 
-	for (let cfg_name in download_cfgs)
-		process_file_url(cfg_name);
+	if (cfg.parallel_downloads && length(download_cfgs) > 1) {
+		// Parallel mode: download all files first, then process each
+		let dlt = env.get_downloader();
+		let jobs = [];
+		for (let cfg_name in download_cfgs) {
+			let sec_cur = cursor();
+			sec_cur.load(pkg.name);
+			if (sec_cur.get(pkg.name, cfg_name, 'enabled') == '0') continue;
+			let url = sec_cur.get(pkg.name, cfg_name, 'url');
+			if (!url) continue;
+			if (is_https_url(url) && !dlt.ssl_supported) {
+				let name = sec_cur.get(pkg.name, cfg_name, 'name');
+				push(status_data.errors, { code: 'errorNoSSLSupport', info: name || url });
+				output.info(sym.fail[0]);
+				continue;
+			}
+			let r_tmp = trim(cmd_output('mktemp -q -t "' + pkg.name + '_tmp.XXXXXXXX"'));
+			push(jobs, { cfg_name, url, r_tmp });
+		}
+		if (length(jobs) > 0) {
+			let _uloop = require('uloop');
+			_uloop.init();
+			let pending = length(jobs);
+			for (let job in jobs) {
+				let dl_cmd = sprintf('%s %s %s %s 2>/dev/null',
+					dlt.command, shell_quote(job.url), dlt.flag, shell_quote(job.r_tmp));
+				_uloop.process('/bin/sh', ['-c', dl_cmd], {}, () => {
+					if (--pending == 0) _uloop.end();
+				});
+			}
+			_uloop.run();
+			_uloop.done();
+			for (let job in jobs)
+				process_file_url(job.cfg_name, null, null, job.r_tmp);
+		}
+	} else {
+		for (let cfg_name in download_cfgs)
+			process_file_url(cfg_name);
+	}
 
 	if (uci_has_changes(pkg.name)) {
 		output.verbose('[PROC] Saving updated file sizes ');
