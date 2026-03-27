@@ -1856,14 +1856,18 @@ function download_lists() {
 	logger_debug('[PERF-DEBUG] ' + step_title + ' took ' + elapsed + 's');
 
 	// Explicitly allow domains in servers mode
-	if (dns_output.allow_filter && cfg.allowed_domain) {
+	if (dns_output.allow_filter && (cfg.allowed_domain || (stat(tmp.allowed)?.size > 0))) {
 		unlink(tmp.sed); writefile(tmp.sed, '');
 		start_time = time();
 		step_title = 'Explicitly allowing domains in ' + cfg.dns;
 		output.verbose('[PROC] ' + step_title + ' ');
 		status_data.message = get_text('statusProcessing') + ': ' + step_title;
+		let allowed_list_extra = '';
+		if (stat(tmp.allowed)?.size > 0)
+			allowed_list_extra = trim(cmd_output(sprintf("sed '/^[[:space:]]*$/d' %s", shell_quote(tmp.allowed))));
+		let all_allow = (cfg.allowed_domain || '') + (allowed_list_extra ? ' ' + allowed_list_extra : '');
 		let allow_input = '';
-		for (let hf in split('' + cfg.allowed_domain, /\s+/))
+		for (let hf in split(all_allow, /\s+/))
 			if (hf) allow_input += hf + '\n';
 		if (allow_input)
 			system(sprintf("printf '%%s' %s | sed -E '%s' >> %s", shell_quote(allow_input), dns_output.allow_filter, shell_quote(tmp.sed)));
