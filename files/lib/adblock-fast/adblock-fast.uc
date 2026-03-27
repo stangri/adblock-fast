@@ -1718,7 +1718,7 @@ function download_lists() {
 	let download_cfgs = [];
 	uci(pkg.name).foreach(pkg.name, 'file_url', (s) => push(download_cfgs, s['.name']));
 
-	if (cfg.parallel_downloads && length(download_cfgs) > 1) {
+	if (cfg.parallel_downloads && uloop && length(download_cfgs) > 1) {
 		// Parallel mode: download all files first, then process each
 		let dlt = env.get_downloader();
 		let jobs = [];
@@ -1738,18 +1738,17 @@ function download_lists() {
 			push(jobs, { cfg_name, url, r_tmp });
 		}
 		if (length(jobs) > 0) {
-			let _uloop = require('uloop');
-			_uloop.init();
+			uloop.init();
 			let pending = length(jobs);
 			for (let job in jobs) {
 				let dl_cmd = sprintf('%s %s %s %s 2>/dev/null',
 					dlt.command, shell_quote(job.url), dlt.flag, shell_quote(job.r_tmp));
-				_uloop.process('/bin/sh', ['-c', dl_cmd], {}, () => {
-					if (--pending == 0) _uloop.end();
+				uloop.process('/bin/sh', ['-c', dl_cmd], {}, () => {
+					if (--pending == 0) uloop.end();
 				});
 			}
-			_uloop.run();
-			_uloop.done();
+			uloop.run();
+			uloop.done();
 			for (let job in jobs)
 				process_file_url(job.cfg_name, null, null, job.r_tmp);
 		}
