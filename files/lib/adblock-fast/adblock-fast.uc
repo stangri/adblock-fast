@@ -1754,17 +1754,20 @@ function download_lists() {
 		if (length(jobs) > 0) {
 			uloop.init();
 			let pending = length(jobs);
+			let completed = [];
 			for (let i = 0; i < length(jobs); i++) {
 				let job = jobs[i];
 				let dl_cmd = sprintf('%s %s %s %s 2>/dev/null',
 					dlt.command, shell_quote(job.url), dlt.flag, shell_quote(job.r_tmp));
 				uloop.process('/bin/sh', ['-c', dl_cmd], {}, () => {
-					process_file_url(job.cfg_name, null, null, job.r_tmp);
+					push(completed, job);
 					if (--pending == 0) uloop.end();
 				});
 			}
 			uloop.run();
 			uloop.done();
+			for (let i = 0; i < length(completed); i++)
+				process_file_url(completed[i].cfg_name, null, null, completed[i].r_tmp);
 		}
 	} else {
 		for (let cfg_name in download_cfgs)
