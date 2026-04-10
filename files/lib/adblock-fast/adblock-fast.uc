@@ -1754,7 +1754,8 @@ function download_lists() {
 		if (length(jobs) > 0) {
 			uloop.init();
 			let pending = length(jobs);
-			for (let job in jobs) {
+			for (let i = 0; i < length(jobs); i++) {
+				let job = jobs[i];
 				let dl_cmd = sprintf('%s %s %s %s 2>/dev/null',
 					dlt.command, shell_quote(job.url), dlt.flag, shell_quote(job.r_tmp));
 				uloop.process('/bin/sh', ['-c', dl_cmd], {}, () => {
