@@ -1758,13 +1758,12 @@ function download_lists() {
 				let dl_cmd = sprintf('%s %s %s %s 2>/dev/null',
 					dlt.command, shell_quote(job.url), dlt.flag, shell_quote(job.r_tmp));
 				uloop.process('/bin/sh', ['-c', dl_cmd], {}, () => {
+					process_file_url(job.cfg_name, null, null, job.r_tmp);
 					if (--pending == 0) uloop.end();
 				});
 			}
 			uloop.run();
 			uloop.done();
-			for (let job in jobs)
-				process_file_url(job.cfg_name, null, null, job.r_tmp);
 		}
 	} else {
 		for (let cfg_name in download_cfgs)
