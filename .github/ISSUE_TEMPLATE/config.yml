@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: OpenWrt Forum thread (general questions / discussion)
+    url: https://forum.openwrt.org/t/adblock-fast-ad-blocking-service-for-dnsmasq-smartdns-and-unbound/
+    about: For usage questions and general discussion, please use the forum thread.
