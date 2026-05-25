@@ -15,8 +15,12 @@ import * as uloop from 'uloop';
 const pkg = {
 	name: 'adblock-fast',
 	version: 'dev-test',
-	compat: '14',
+	compat: '15',
 	memory_threshold: 33554432,
+	// Per parallel-download task slot: ucode task child (~1 MB) + the
+	// downloader's RSS. Measured: curl ~2.8 MB, uclient-fetch ~2.5 MB,
+	// GNU wget ~8.5 MB. Conservative round-ups, in bytes.
+	task_slot_ram: { curl: 4194304, 'uclient-fetch': 4194304, wget: 10485760, 'default': 10485760 },
 	config_file: '/etc/config/adblock-fast',
 	dnsmasq_file: '/var/run/adblock-fast/adblock-fast.dnsmasq',
 	run_file: '/dev/shm/adblock-fast',
@@ -319,30 +323,49 @@ env.detect = function() {
 
 env.get_downloader = function() {
 	if (env._dl_cache) return env._dl_cache;
-	let command, flag, ssl_supported;
+	let command, flag, ssl_supported, kind;
+	// Preference: curl, then uclient-fetch (both ~2.5-2.8 MB RSS); GNU wget
+	// is last — it is ~8.5 MB RSS, ~3x heavier, costly when run in parallel.
 	if (is_present('curl')) {
+		kind = 'curl';
 		command = 'curl -f --silent --insecure';
 		if (cfg.curl_additional_param) command += ' ' + cfg.curl_additional_param;
 		if (cfg.curl_max_file_size) command += ' --max-filesize ' + cfg.curl_max_file_size;
 		if (cfg.curl_retry) command += ' --retry ' + cfg.curl_retry;
 		if (cfg.download_timeout) command += ' --connect-timeout ' + cfg.download_timeout;
 		flag = '-o';
+	} else if (is_present('uclient-fetch')) {
+		kind = 'uclient-fetch';
+		command = 'uclient-fetch --no-check-certificate -q';
+		if (cfg.download_timeout) command += ' --timeout ' + cfg.download_timeout;
+		flag = '-O';
 	} else if (is_present('/usr/libexec/wget-ssl')) {
+		kind = 'wget';
 		command = '/usr/libexec/wget-ssl --no-check-certificate -q';
 		if (cfg.download_timeout) command += ' --timeout ' + cfg.download_timeout;
 		flag = '-O';
 	} else if (is_present('wget') && cmd_rc("wget --version 2>/dev/null | grep -q '+https'") == 0) {
+		kind = 'wget';
 		command = 'wget --no-check-certificate -q';
 		if (cfg.download_timeout) command += ' --timeout ' + cfg.download_timeout;
 		flag = '-O';
 	} else {
-		command = 'uclient-fetch --no-check-certificate -q';
+		// Last-ditch: nothing detected — use the /usr/bin/wget ALTERNATIVES
+		// alias (GNU wget or uclient-fetch), the downloader name most likely
+		// to exist on any OpenWrt system.
+		kind = 'wget';
+		command = 'wget --no-check-certificate -q';
 		if (cfg.download_timeout) command += ' --timeout ' + cfg.download_timeout;
 		flag = '-O';
 	}
+	// uclient-fetch is built with TLS support but loads it at runtime from a
+	// libustream-ssl provider — so its HTTPS capability is gated on that .so,
+	// which curl/wget --version greps cannot see.
 	ssl_supported = cmd_rc("curl --version 2>/dev/null | grep -q 'Protocols: .*https.*'") == 0 ||
-		cmd_rc("wget --version 2>/dev/null | grep -q '+ssl'") == 0;
-	env._dl_cache = { command, flag, ssl_supported };
+		cmd_rc("wget --version 2>/dev/null | grep -q '+ssl'") == 0 ||
+		stat('/lib/libustream-ssl.so') != null ||
+		stat('/usr/lib/libustream-ssl.so') != null;
+	env._dl_cache = { command, flag, ssl_supported, kind };
 	return env._dl_cache;
 };
 
@@ -640,7 +663,7 @@ function get_text(r, ...args) {
 	case 'errorParsingList': return "Failed to parse";
 	case 'errorNoSSLSupport': return "No HTTPS/SSL support on device";
 	case 'errorCreatingDirectory': return "Failed to create output/cache/gzip file directory";
-	case 'errorDetectingFileType': return "Failed to detect format";
+	case 'errorDetectingFileType': return sprintf("Failed to detect format for %s", a);
 	case 'errorNothingToDo': return "No blocked list URLs nor blocked-domains enabled";
 	case 'errorTooLittleRam': return sprintf("Free ram (%s) is not enough to process all enabled block-lists", a);
 	case 'errorCreatingBackupFile': return sprintf("Failed to create backup file %s", a);
@@ -663,6 +686,7 @@ function get_text(r, ...args) {
 	case 'warningMissingRecommendedPackages': return "Some recommended packages are missing";
 	case 'warningInvalidCompressedCacheDir': return sprintf("Invalid compressed cache directory '%s'", a);
 	case 'warningFreeRamCheckFail': return "Can't detect free RAM";
+	case 'warningParallelDownloadsThrottled': return sprintf("Parallel downloads reduced to %s due to low free memory", a);
 	case 'warningSanityCheckTLD': return sprintf("Sanity check discovered TLDs in %s", a);
 	case 'warningSanityCheckLeadingDot': return sprintf("Sanity check discovered leading dots in %s", a);
 	case 'warningInvalidDomainsRemoved': return sprintf("Removed %s invalid domain entries from block-list (domains starting with -/./numbers or containing invalid patterns)", a);
@@ -842,7 +866,7 @@ const config_schema = { // ucode-lsp disable
 	enabled:                 ['bool', false],
 	force_dns:               ['bool', true],
 	ipv6_enabled:            ['bool', false],
-	parallel_downloads:      ['bool', true],
+	parallel_downloads:      ['int', 8],
 	procd_trigger_wan6:      ['bool', false],
 	update_config_sizes:     ['bool', true],
 	// Strings
@@ -924,7 +948,12 @@ function load_dl_command() { env.get_downloader(); }
 // ── detect_file_type ────────────────────────────────────────────────
 
 function detect_file_type(file) {
-	let first_line = split(readfile(file) || '', '\n')[0];
+	let first_line = '';
+	let fh = open(file, 'r');
+	if (fh) {
+		first_line = split(fh.read(4096) || '', '\n')[0];
+		fh.close();
+	}
 	for (let name in keys(list_formats)) {
 		let fmt = list_formats[name];
 		if (fmt.first_line && first_line == fmt.first_line) return name;
@@ -1565,107 +1594,126 @@ function resolver(action) {
 
 // ── process_file_url ────────────────────────────────────────────────
 
-function process_file_url(section, url_override, action_override, predownloaded) {
-	let url, file_action, name, size_val;
+// prepare_file_url(): parallelizable half — resolve config, download into
+// out_file, detect format, filter in place. Returns a result object with
+// everything callers need; no printing, no shared state — safe in a
+// uloop.task child. The [ DL ] line is emitted by emit_dl_line() (below),
+// called by both serial callers and the parallel uloop.task callback so
+// the line shows in the parent's visible stderr.
+function prepare_file_url(section, url_override, action_override, out_file) {
+	let url, file_action, name;
+	let res = { section: section, url: null, name: null, action: 'block',
+		out_file: out_file, size: null, format: null, ok: false, code: null, skip: false };
 
 	if (section && !url_override) {
 		let sec_cur = cursor();
 		sec_cur.load(pkg.name);
-		let en = sec_cur.get(pkg.name, section, 'enabled');
-		if (en == '0') return true;
+		if (sec_cur.get(pkg.name, section, 'enabled') == '0') { res.ok = true; res.skip = true; return res; }
 		url = sec_cur.get(pkg.name, section, 'url');
 		file_action = sec_cur.get(pkg.name, section, 'action') || 'block';
 		name = sec_cur.get(pkg.name, section, 'name');
-		size_val = sec_cur.get(pkg.name, section, 'size');
 	} else {
 		url = url_override;
 		file_action = action_override || 'block';
 	}
+	res.url = url; res.name = name; res.action = file_action;
 
-	if (!cfg.enabled) return true;
-	if (!url) return false;
+	if (!cfg.enabled) { res.ok = true; res.skip = true; return res; }
+	if (!url) { res.skip = true; return res; }
 
-	let label = replace(url, /^[a-z]+:\/\//, '');
-	label = replace(label, /\/.*$/, '');
-	label = name || label;
+	if (is_https_url(url) && !env.get_downloader().ssl_supported) {
+		res.code = 'errorNoSSLSupport';
+		return res;
+	}
+
+	if (!download(url, out_file) || !(stat(out_file)?.size > 0)) {
+		res.code = 'errorDownloadingList';
+		return res;
+	}
+
+	ensure_trailing_newline(out_file);
+	res.size = get_local_filesize(out_file);
+
+	let format = detect_file_type(out_file);
+	let filter = list_formats[format]?.filter;
+	if (!filter) {
+		res.code = 'errorDetectingFileType';
+		return res;
+	}
+	res.format = format;
+	if (format == 'hosts')
+		sed_inplace('/# Title: StevenBlack/,/# Custom host records are listed here/d', out_file);
+	if (filter && file_action != 'file')
+		sed_inplace(filter, out_file);
+
+	if (!(stat(out_file)?.size > 0)) {
+		res.code = 'errorParsingList';
+		return res;
+	}
+
+	ensure_trailing_newline(out_file);
+	res.ok = true;
+	return res;
+}
+
+// emit_dl_line(): print the live [ DL ] outcome line for one result.
+// Called from serial callers AND from the parallel download_lists
+// callback as each task reports. Output goes to the PARENT'S stderr (and
+// syslog) so it's visible in the install terminal — uloop.task does not
+// propagate the child's stderr, which is why prepare_file_url is silent.
+function emit_dl_line(res) {
+	if (!res || res.skip) return;
+	let type_name = (res.action == 'allow') ? 'Allowed' :
+	                (res.action == 'file')  ? 'File'    : 'Blocked';
+	let url = res.url || '';
+	let label = res.name;
+	if (!label) {
+		label = replace(url, /^[a-z]+:\/\//, '');
+		label = replace(label, /\/.*$/, '');
+	}
 	label = 'List: ' + label;
+	let outcome = res.ok ? sym.ok : sym.fail;
+	let fmtsuffix = (res.ok && res.format) ? ' (' + res.format + ')' : '';
+	output.info(outcome[0]);
+	output.verbose('[ DL ] ' + type_name + ' ' + label + fmtsuffix + ' ' + outcome[1] + '\\n');
+}
 
-	let type_name, d_tmp;
-	switch (file_action) {
-	case 'allow': type_name = 'Allowed'; d_tmp = tmp.allowed; break;
-	case 'block': type_name = 'Blocked'; d_tmp = tmp.b; break;
-	case 'file': type_name = 'File'; d_tmp = tmp.b; break;
+// apply_result(): serial half — append to accumulator, record errors,
+// stage the size update. Parent-side only; never call from a task child.
+function apply_result(res) {
+	if (!res || res.skip) return;
+	if (res.code) {
+		push(status_data.errors, { code: res.code, info: res.name || res.url });
+		return;
 	}
-
-	if (!predownloaded && is_https_url(url) && !env.get_downloader().ssl_supported) {
-		output.info(sym.fail[0]);
-		output.verbose('[ DL ] ' + type_name + ' ' + label + ' ' + sym.fail[1] + '\\n');
-		push(status_data.errors, { code: 'errorNoSSLSupport', info: name || url });
-		return true;
-	}
-
-	let r_tmp = predownloaded || trim(cmd_output('mktemp -q -t "' + pkg.name + '_tmp.XXXXXXXX"'));
-	if (predownloaded && !(stat(r_tmp)?.size > 0)) {
-		output.info(sym.fail[0]);
-		output.verbose('[ DL ] ' + type_name + ' ' + label + ' ' + sym.fail[1] + '\\n');
-		push(status_data.errors, { code: 'errorDownloadingList', info: name || url });
-		unlink(r_tmp);
-		return true;
-	}
-	if (!predownloaded && (!url || !download(url, r_tmp) || !(stat(r_tmp)?.size > 0))) {
-		output.info(sym.fail[0]);
-		output.verbose('[ DL ] ' + type_name + ' ' + label + ' ' + sym.fail[1] + '\\n');
-		push(status_data.errors, { code: 'errorDownloadingList', info: name || url });
-	} else {
-		// Ensure newline at end
-		ensure_trailing_newline(r_tmp);
-
-		// Update size in config or RAM mirror
-		if (section) {
-			let new_size = get_local_filesize(r_tmp);
-			if (new_size != null && ('' + size_val) != ('' + new_size)) {
-				let c = cfg.update_config_sizes ? uci(pkg.name) : ram_uci(pkg.name);
-				c.set(pkg.name, section, 'size', '' + new_size);
-				c.save(pkg.name);
-			}
-		}
-
-		let format = detect_file_type(r_tmp);
-		let filter = list_formats[format]?.filter;
-		if (!filter) {
-			output.info(sym.fail[0]);
-			output.verbose('[ DL ] ' + type_name + ' ' + label + ' ' + sym.fail[1] + '\\n');
-			push(status_data.errors, { code: 'errorDetectingFileType', info: name || url });
-			unlink(r_tmp);
-			return true;
-		}
-		if (format == 'hosts')
-			sed_inplace('/# Title: StevenBlack/,/# Custom host records are listed here/d', r_tmp);
-
-		if (filter && file_action != 'file')
-			sed_inplace(filter, r_tmp);
-
-		if (!(stat(r_tmp)?.size > 0)) {
-			output.info(sym.fail[0]);
-			output.verbose('[ DL ] ' + type_name + ' ' + label + ' (' + format + ') ' + sym.fail[1] + '\\n');
-			push(status_data.errors, { code: 'errorParsingList', info: name || url });
-		} else {
-			// Ensure file ends with newline, then append to accumulator
-			ensure_trailing_newline(r_tmp);
-			let inp = open(r_tmp, 'r');
-			let out = open(d_tmp, 'a');
-			if (inp && out) {
-				let chunk;
-				while ((chunk = inp.read(65536)) && length(chunk))
-					out.write(chunk);
-			}
-			if (inp) inp.close();
-			if (out) out.close();
-			output.info(sym.ok[0]);
-			output.verbose('[ DL ] ' + type_name + ' ' + label + ' (' + format + ') ' + sym.ok[1] + '\\n');
+	if (!res.ok) return;
+	if (res.section && res.size != null) {
+		let c = cfg.update_config_sizes ? uci(pkg.name) : ram_uci(pkg.name);
+		if (('' + c.get(pkg.name, res.section, 'size')) != ('' + res.size)) {
+			c.set(pkg.name, res.section, 'size', '' + res.size);
+			c.save(pkg.name);
 		}
 	}
-	unlink(r_tmp);
+	let d_tmp = (res.action == 'allow') ? tmp.allowed : tmp.b;
+	let inp = open(res.out_file, 'r');
+	let out = open(d_tmp, 'a');
+	if (inp && out) {
+		let chunk;
+		while ((chunk = inp.read(65536)) && length(chunk))
+			out.write(chunk);
+	}
+	if (inp) inp.close();
+	if (out) out.close();
+}
+
+// process_file_url(): thin wrapper for serial callers (dnsmasq file,
+// non-parallel mode). Kept exported — also the test-runner's anchor.
+function process_file_url(section, url_override, action_override) {
+	let out_file = trim(cmd_output('mktemp -q -t "' + pkg.name + '_tmp.XXXXXXXX"'));
+	let res = prepare_file_url(section, url_override, action_override, out_file);
+	emit_dl_line(res);
+	apply_result(res);
+	unlink(out_file);
 	return true;
 }
 
@@ -1696,25 +1744,45 @@ function download_dnsmasq_file() {
 // ── download_lists ──────────────────────────────────────────────────
 
 function download_lists() {
-	// RAM check
 	let free_mem = get_mem_available();
-	if (!free_mem) {
-		push(status_data.warnings, { code: 'warningFreeRamCheckFail', info: '' });
-		output.warning(get_text('warningFreeRamCheckFail'));
-	} else {
-		let total_sizes = 0;
-		let c = cfg.update_config_sizes ? uci(pkg.name) : ram_uci(pkg.name);
-		uci(pkg.name).foreach(pkg.name, 'file_url', (s) => {
-			if (s.enabled == '0') return;
-			let sz = c.get(pkg.name, s['.name'], 'size');
-			if (!sz && s.url) sz = get_url_filesize(s.url);
-			if (sz) total_sizes += int('' + sz);
-		});
-		if (free_mem < total_sizes * 2) {
+
+	// Enumerate enabled lists and sum their sizes in one pass.
+	let download_cfgs = [];
+	let total_sizes = 0;
+	let szc = cfg.update_config_sizes ? uci(pkg.name) : ram_uci(pkg.name);
+	uci(pkg.name).foreach(pkg.name, 'file_url', (s) => {
+		if (s.enabled == '0') return;
+		push(download_cfgs, s['.name']);
+		let sz = szc.get(pkg.name, s['.name'], 'size');
+		if (!sz && s.url) sz = get_url_filesize(s.url);
+		if (sz) total_sizes += int('' + sz);
+	});
+	let n_lists = length(download_cfgs);
+
+	// RAM budget: list data needs ~total_sizes*2; each parallel task slot
+	// needs the ucode child + its downloader (task_slot_ram, keyed by kind).
+	// Effective cap = min(configured parallel_downloads, list count, what
+	// free RAM affords) — so a tight router throttles itself down.
+	let base = total_sizes * 2;
+	let dlt = env.get_downloader();
+	let slot_ram = pkg.task_slot_ram[dlt.kind] || pkg.task_slot_ram['default'];
+	let task_cap = +cfg.parallel_downloads;
+	if (free_mem) {
+		if (free_mem < base + slot_ram) {
 			push(status_data.errors, { code: 'errorTooLittleRam', info: '' + free_mem });
 			return false;
 		}
+		let affordable = int((free_mem - base) / slot_ram);
+		if (task_cap > affordable) {
+			task_cap = affordable;
+			push(status_data.warnings, { code: 'warningParallelDownloadsThrottled', info: '' + task_cap });
+		}
+	} else {
+		push(status_data.warnings, { code: 'warningFreeRamCheckFail', info: '' });
+		output.warning(get_text('warningFreeRamCheckFail'));
 	}
+	if (task_cap > n_lists) task_cap = n_lists;
+	if (task_cap < 1) task_cap = 1;
 
 	status_data.message = get_text('statusDownloading') + '...';
 	status_data.status = 'statusDownloading';
@@ -1728,44 +1796,77 @@ function download_lists() {
 
 	output.info('Downloading lists ');
 
-	// Process each file_url section
-	let download_cfgs = [];
-	uci(pkg.name).foreach(pkg.name, 'file_url', (s) => push(download_cfgs, s['.name']));
-
-	if (cfg.parallel_downloads && uloop && length(download_cfgs) > 1) {
-		// Parallel mode: download all files first, then process each
-		let dlt = env.get_downloader();
-		let jobs = [];
+	if (cfg.parallel_downloads && uloop && task_cap > 1 && n_lists > 1) {
+		// Parallel: a bounded uloop.task pool, <= task_cap tasks in flight.
+		// Each task forks; the child runs prepare_file_url (download + detect
+		// + filter) and pipe.sends the result; the parent applies serially
+		// after the loop. popen/system are safe inside the child — it is not
+		// running the event loop.
+		if (cfg.debug_performance)
+			logger_debug(sprintf('[PERF] download_lists: %d lists, cap %d, downloader %s (~%d KB/slot), MemAvailable %d KB',
+				n_lists, task_cap, dlt.kind, slot_ram / 1024, (free_mem || 0) / 1024));
+		uloop.init();
+		let next = 0, running = 0, results = {}, tmps = [];
+		let spawn;
+		spawn = function() {
+			while (running < task_cap && next < n_lists) {
+				let cfg_name = download_cfgs[next++];
+				let out_file = trim(cmd_output('mktemp -q -t "' + pkg.name + '_tmp.XXXXXXXX"'));
+				push(tmps, out_file);
+				running++;
+				let t = uloop.task(
+					function(pipe) {
+						let res = prepare_file_url(cfg_name, null, null, out_file);
+						if (cfg.debug_performance) {
+							let m = match(readfile('/proc/self/status') || '', /VmHWM:[ \t]+([0-9]+)/);
+							res.peak_rss = m ? int(m[1]) : 0;
+						}
+						pipe.send(res);
+					},
+					function(res) {
+						// uloop.task may fire this callback twice per child
+						// (data send + child-exit EOF). Count completed sections,
+						// not callback firings, so null/duplicate fires are no-ops.
+						if (!res || !res.section || results[res.section]) return;
+						results[res.section] = res;
+						running--;
+						emit_dl_line(res);
+						if (cfg.debug_performance)
+							logger_debug(sprintf('[PERF] task %s: peak RSS %d KB, list size %d KB',
+								res.name || res.url || '?', +(res.peak_rss || 0), int((res.size || 0) / 1024)));
+						if (length(keys(results)) >= n_lists) uloop.end();
+						else spawn();
+					}
+				);
+				if (t == null) {
+					// Fork failed — no callback will ever fire for this section;
+					// record a sentinel so the completion gate accounts for it.
+					results[cfg_name] = false;
+					running--;
+					if (length(keys(results)) >= n_lists) uloop.end();
+				}
+			}
+		};
+		spawn();
+		// Watchdog: never hang if a task child dies without reporting.
+		uloop.timer(600000, function() { uloop.end(); });
+		uloop.run();
+		uloop.done();
 		for (let cfg_name in download_cfgs) {
-			let sec_cur = cursor();
-			sec_cur.load(pkg.name);
-			if (sec_cur.get(pkg.name, cfg_name, 'enabled') == '0') continue;
-			let url = sec_cur.get(pkg.name, cfg_name, 'url');
-			if (!url) continue;
-			if (is_https_url(url) && !dlt.ssl_supported) {
-				let name = sec_cur.get(pkg.name, cfg_name, 'name');
-				push(status_data.errors, { code: 'errorNoSSLSupport', info: name || url });
-				output.info(sym.fail[0]);
-				continue;
+			let res = results[cfg_name];
+			if (res) {
+				apply_result(res);
+			} else {
+				// Task didn't report (crash/timeout/spawn fail) — surface a
+				// user-friendly label, not the anonymous UCI section name.
+				let sec_cur = cursor();
+				sec_cur.load(pkg.name);
+				let label = sec_cur.get(pkg.name, cfg_name, 'name') ||
+					sec_cur.get(pkg.name, cfg_name, 'url') || cfg_name;
+				push(status_data.errors, { code: 'errorDownloadingList', info: label });
 			}
-			let r_tmp = trim(cmd_output('mktemp -q -t "' + pkg.name + '_tmp.XXXXXXXX"'));
-			push(jobs, { cfg_name, url, r_tmp });
 		}
-		if (length(jobs) > 0) {
-			uloop.init();
-			let pending = length(jobs);
-			for (let i = 0; i < length(jobs); i++) {
-				let job = jobs[i];
-				let dl_cmd = sprintf('%s %s %s %s 2>/dev/null',
-					dlt.command, shell_quote(job.url), dlt.flag, shell_quote(job.r_tmp));
-				uloop.process('/bin/sh', ['-c', dl_cmd], {}, () => {
-					process_file_url(job.cfg_name, null, null, job.r_tmp);
-					if (--pending == 0) uloop.end();
-				});
-			}
-			uloop.run();
-			uloop.done();
-		}
+		for (let f in tmps) unlink(f);
 	} else {
 		for (let cfg_name in download_cfgs)
 			process_file_url(cfg_name);
