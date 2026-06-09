@@ -109,6 +109,9 @@ load_validate_config() {
 		'config_update_enabled:bool:0' \
 		'config_update_url:string:https://cdn.jsdelivr.net/gh/openwrt/packages/net/adblock-fast/files/adblock-fast.config.update' \
 		'download_timeout:range(1,60):20' \
+		'download_connect_timeout:range(1,60):10' \
+		'download_max_time:or("", uinteger)' \
+		'download_allow_insecure:bool:1' \
 		'pause_timeout:range(1,600):20' \
 		'rpcd_token:string' \
 		'curl_additional_param:or("", string)' \

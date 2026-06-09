@@ -25,7 +25,7 @@ const pkg = {
 	dnsmasq_file: '/var/run/adblock-fast/adblock-fast.dnsmasq',
 	run_file: '/dev/shm/adblock-fast',
 	triggers: {
-		reload: 'parallel_downloads debug download_timeout allowed_domain blocked_domain allowed_url blocked_url dns config_update_enabled config_update_url dnsmasq_config_file_url curl_additional_param curl_max_file_size curl_retry',
+		reload: 'parallel_downloads debug download_timeout download_connect_timeout download_max_time download_allow_insecure allowed_domain blocked_domain allowed_url blocked_url dns config_update_enabled config_update_url dnsmasq_config_file_url curl_additional_param curl_max_file_size curl_retry',
 		restart: 'compressed_cache compressed_cache_dir force_dns led force_dns_port',
 	},
 };
@@ -326,35 +326,54 @@ env.get_downloader = function() {
 	let command, flag, ssl_supported, kind;
 	// Preference: curl, then uclient-fetch (both ~2.5-2.8 MB RSS); GNU wget
 	// is last — it is ~8.5 MB RSS, ~3x heavier, costly when run in parallel.
+	// Timeout semantics differ per downloader (see README support matrix):
+	//   download_connect_timeout → connection phase only (curl/GNU wget).
+	//   download_timeout → abort a stalled transfer: curl has no read-timeout,
+	//     so emulate it with --speed-limit 1 --speed-time (abort if avg speed
+	//     stays below 1 B/s for that many seconds); GNU wget uses --read-timeout;
+	//     uclient-fetch / BusyBox wget only have --timeout (inactivity-based).
+	//   download_max_time → hard cap on the whole transfer; generically named
+	//     so any downloader can adopt it, though only curl (--max-time)
+	//     implements it today.
 	if (is_present('curl')) {
 		kind = 'curl';
-		command = 'curl -f --silent --insecure';
+		command = 'curl -f --silent';
+		if (cfg.download_allow_insecure) command += ' --insecure';
 		if (cfg.curl_additional_param) command += ' ' + cfg.curl_additional_param;
 		if (cfg.curl_max_file_size) command += ' --max-filesize ' + cfg.curl_max_file_size;
 		if (cfg.curl_retry) command += ' --retry ' + cfg.curl_retry;
-		if (cfg.download_timeout) command += ' --connect-timeout ' + cfg.download_timeout;
+		if (cfg.download_connect_timeout) command += ' --connect-timeout ' + cfg.download_connect_timeout;
+		if (cfg.download_timeout) command += ' --speed-limit 1 --speed-time ' + cfg.download_timeout;
+		if (cfg.download_max_time) command += ' --max-time ' + cfg.download_max_time;
 		flag = '-o';
 	} else if (is_present('uclient-fetch')) {
 		kind = 'uclient-fetch';
-		command = 'uclient-fetch --no-check-certificate -q';
+		command = 'uclient-fetch -q';
+		if (cfg.download_allow_insecure) command += ' --no-check-certificate';
 		if (cfg.download_timeout) command += ' --timeout ' + cfg.download_timeout;
 		flag = '-O';
 	} else if (is_present('/usr/libexec/wget-ssl')) {
 		kind = 'wget';
-		command = '/usr/libexec/wget-ssl --no-check-certificate -q';
-		if (cfg.download_timeout) command += ' --timeout ' + cfg.download_timeout;
+		command = '/usr/libexec/wget-ssl -q';
+		if (cfg.download_allow_insecure) command += ' --no-check-certificate';
+		if (cfg.download_connect_timeout) command += ' --connect-timeout ' + cfg.download_connect_timeout;
+		if (cfg.download_timeout) command += ' --read-timeout ' + cfg.download_timeout;
 		flag = '-O';
 	} else if (is_present('wget') && cmd_rc("wget --version 2>/dev/null | grep -q '+https'") == 0) {
 		kind = 'wget';
-		command = 'wget --no-check-certificate -q';
-		if (cfg.download_timeout) command += ' --timeout ' + cfg.download_timeout;
+		command = 'wget -q';
+		if (cfg.download_allow_insecure) command += ' --no-check-certificate';
+		if (cfg.download_connect_timeout) command += ' --connect-timeout ' + cfg.download_connect_timeout;
+		if (cfg.download_timeout) command += ' --read-timeout ' + cfg.download_timeout;
 		flag = '-O';
 	} else {
 		// Last-ditch: nothing detected — use the /usr/bin/wget ALTERNATIVES
 		// alias (GNU wget or uclient-fetch), the downloader name most likely
-		// to exist on any OpenWrt system.
+		// to exist on any OpenWrt system. Only --timeout is portable across
+		// BusyBox wget / uclient-fetch, so download_connect_timeout is omitted here.
 		kind = 'wget';
-		command = 'wget --no-check-certificate -q';
+		command = 'wget -q';
+		if (cfg.download_allow_insecure) command += ' --no-check-certificate';
 		if (cfg.download_timeout) command += ' --timeout ' + cfg.download_timeout;
 		flag = '-O';
 	}
@@ -762,10 +781,12 @@ function get_url_filesize(url) { // ucode-lsp disable
 	if (!url) return null;
 	let size = '';
 	if (is_present('curl')) {
-		size = cmd_output(sprintf("curl --silent --insecure --fail --head --request GET --connect-timeout 2 %s | awk -F': ' '{IGNORECASE=1}/content-length/ {gsub(/\\r/, \"\"); print $2}'", shell_quote(url)));
+		let insecure = cfg.download_allow_insecure ? '--insecure ' : '';
+		size = cmd_output(sprintf("curl --silent %s--fail --head --request GET --connect-timeout 2 %s | awk -F': ' '{IGNORECASE=1}/content-length/ {gsub(/\\r/, \"\"); print $2}'", insecure, shell_quote(url)));
 	}
 	if (!size && is_present('uclient-fetch')) {
-		size = cmd_output(sprintf("uclient-fetch --spider --timeout 2 %s -O /dev/null 2>&1 | sed -n '/^Download/ s/.*\\(\\([0-9]*\\) bytes\\).*/\\1/p'", shell_quote(url)));
+		let insecure = cfg.download_allow_insecure ? '--no-check-certificate ' : '';
+		size = cmd_output(sprintf("uclient-fetch --spider %s--timeout 2 %s -O /dev/null 2>&1 | sed -n '/^Download/ s/.*\\(\\([0-9]*\\) bytes\\).*/\\1/p'", insecure, shell_quote(url)));
 	}
 	return size ? size : null;
 }
@@ -863,6 +884,7 @@ const config_schema = { // ucode-lsp disable
 	debug_performance:       ['bool', false],
 	dnsmasq_sanity_check:    ['bool', true],
 	dnsmasq_validity_check:  ['bool', false],
+	download_allow_insecure: ['bool', true],
 	enabled:                 ['bool', false],
 	force_dns:               ['bool', true],
 	ipv6_enabled:            ['bool', false],
@@ -876,6 +898,8 @@ const config_schema = { // ucode-lsp disable
 	curl_retry:              ['string', '3'],
 	dns:                     ['string', 'dnsmasq.servers'],
 	dnsmasq_config_file_url: ['string'],
+	download_connect_timeout: ['string', '10'],
+	download_max_time:       ['string'],
 	download_timeout:        ['string', '20'],
 	heartbeat_sleep_timeout: ['string', '10'],
 	led:                     ['string'],
