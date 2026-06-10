@@ -15,7 +15,7 @@ import * as uloop from 'uloop';
 const pkg = {
 	name: 'adblock-fast',
 	version: 'dev-test',
-	compat: '16',
+	compat: '17',
 	memory_threshold: 33554432,
 	// Per parallel-download task slot: ucode task child (~1 MB) + the
 	// downloader's RSS. Measured: curl ~2.8 MB, uclient-fetch ~2.5 MB,
