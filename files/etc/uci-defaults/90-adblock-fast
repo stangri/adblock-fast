@@ -77,6 +77,21 @@ if [ "${old_compat:-14}" -lt 15 ] 2>/dev/null; then
 		uci set "${pkg}.config.parallel_downloads=8"
 fi
 
+# ── Split download_timeout → download_connect_timeout (compat < 16) ──
+# Pre-compat-16, download_timeout doubled as the connection-phase timeout
+# (curl --connect-timeout, wget --timeout). It now means a transfer-stall
+# timeout, and the connection phase has its own download_connect_timeout.
+# Seed the new option from the user's existing download_timeout so their
+# old connect tolerance is preserved. Skip if download_connect_timeout is
+# already set (fresh installs ship one); never re-fires once compat >= 16.
+
+if [ "${old_compat:-14}" -lt 16 ] 2>/dev/null; then
+	if [ -z "$(uci -q get "${pkg}.config.download_connect_timeout")" ] \
+		&& [ -n "$(uci -q get "${pkg}.config.download_timeout")" ]; then
+		uci set "${pkg}.config.download_connect_timeout=$(uci -q get "${pkg}.config.download_timeout")"
+	fi
+fi
+
 # ── Version tracking  ──────────────────────────
 [ -n "$initCompat" ] && uci set "${pkg}.config.config_compat=$initCompat"
 uci set "${pkg}.config.config_version=$($_ucode version 2>/dev/null)"

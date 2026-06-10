@@ -22,7 +22,7 @@ if type extra_command 1>/dev/null 2>&1; then
 fi
 
 readonly packageName='adblock-fast'
-readonly initCompat='15'
+readonly initCompat='16'
 readonly _ucode="ucode -S -L /lib/${packageName} /lib/${packageName}/cli.uc --"
 _procd_svc_data=
 _fw4_restart=

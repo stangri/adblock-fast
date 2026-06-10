@@ -15,7 +15,7 @@ import * as uloop from 'uloop';
 const pkg = {
 	name: 'adblock-fast',
 	version: 'dev-test',
-	compat: '15',
+	compat: '16',
 	memory_threshold: 33554432,
 	// Per parallel-download task slot: ucode task child (~1 MB) + the
 	// downloader's RSS. Measured: curl ~2.8 MB, uclient-fetch ~2.5 MB,
@@ -183,6 +183,9 @@ let env = {
 
 	// Downloader (set lazily by env.get_downloader())
 	_dl_cache: null,
+	// Set by download(): true when the last transfer was aborted by a timeout
+	// (only curl reports this distinctly — see download()).
+	_last_dl_timeout: false,
 
 	// Guard flags
 	_detected: false,
@@ -464,8 +467,15 @@ function awk_dedup_subdomains(input, output) {
 
 function download(url, dest) {
 	let dlt = env.get_downloader();
-	return system(sprintf('%s %s %s %s 2>/dev/null',
-		dlt.command, shell_quote(url), dlt.flag, shell_quote(dest))) == 0;
+	let rc = system(sprintf('%s %s %s %s 2>/dev/null',
+		dlt.command, shell_quote(url), dlt.flag, shell_quote(dest)));
+	// curl exits 28 for ANY timeout (--connect-timeout / --speed-time /
+	// --max-time). No other downloader exposes a distinct timeout exit code —
+	// a wget/uclient-fetch stall collapses into a generic network-failure code
+	// indistinguishable from DNS/refused/reset — so a timeout-aborted transfer
+	// is only reliably separable from other failures when curl is in use.
+	env._last_dl_timeout = (dlt.kind == 'curl' && rc == 28);
+	return rc == 0;
 }
 
 function service_restart(name) {
@@ -706,6 +716,7 @@ function get_text(r, ...args) {
 	case 'warningInvalidCompressedCacheDir': return sprintf("Invalid compressed cache directory '%s'", a);
 	case 'warningFreeRamCheckFail': return "Can't detect free RAM";
 	case 'warningParallelDownloadsThrottled': return sprintf("Parallel downloads reduced to %s due to low free memory", a);
+	case 'warningDownloadTimeout': return sprintf("Download of %s timed out; the server may be too slow — consider increasing download_timeout, download_connect_timeout or download_max_time", a);
 	case 'warningSanityCheckTLD': return sprintf("Sanity check discovered TLDs in %s", a);
 	case 'warningSanityCheckLeadingDot': return sprintf("Sanity check discovered leading dots in %s", a);
 	case 'warningInvalidDomainsRemoved': return sprintf("Removed %s invalid domain entries from block-list (domains starting with -/./numbers or containing invalid patterns)", a);
@@ -1652,6 +1663,7 @@ function prepare_file_url(section, url_override, action_override, out_file) {
 
 	if (!download(url, out_file) || !(stat(out_file)?.size > 0)) {
 		res.code = 'errorDownloadingList';
+		res.timed_out = env._last_dl_timeout;
 		return res;
 	}
 
@@ -1708,6 +1720,8 @@ function apply_result(res) {
 	if (!res || res.skip) return;
 	if (res.code) {
 		push(status_data.errors, { code: res.code, info: res.name || res.url });
+		if (res.timed_out)
+			push(status_data.warnings, { code: 'warningDownloadTimeout', info: res.name || res.url });
 		return;
 	}
 	if (!res.ok) return;
@@ -2159,6 +2173,8 @@ function adb_config_update(param) {
 	if (!download(cfg.config_update_url, r_tmp) || !(stat(r_tmp)?.size > 0)) {
 		output.failn();
 		push(status_data.errors, { code: 'errorDownloadingConfigUpdate', info: '' });
+		if (env._last_dl_timeout)
+			push(status_data.warnings, { code: 'warningDownloadTimeout', info: 'Config Update file' });
 	} else {
 		if (system(sprintf("sed -f %s -i %s 2>/dev/null", shell_quote(r_tmp), shell_quote(pkg.config_file))) == 0)
 			output.okn();
