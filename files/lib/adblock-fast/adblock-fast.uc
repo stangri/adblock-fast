@@ -1215,7 +1215,10 @@ env.load = function(param, validation_result) {
 		}
 		if (length(missing) && param != 'quiet') {
 			output.warning(get_text('warningMissingRecommendedPackages') + ', install them by running:');
-			output.print('opkg update; opkg --force-overwrite install ' + join(' ', missing) + ';');
+			if (is_present('apk'))
+				output.print('apk update; apk add ' + join(' ', missing) + ';');
+			else
+				output.print('opkg update; opkg --force-overwrite install ' + join(' ', missing) + ';');
 		}
 	};
 
