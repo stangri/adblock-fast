@@ -712,7 +712,7 @@ function get_text(r, ...args) {
 	case 'statusTriggerBootWait': return "waiting for trigger (on_boot)";
 	case 'statusTriggerStartWait': return "waiting for trigger (on_start)";
 	case 'warningExternalDnsmasqConfig': return "Use of external dnsmasq config file detected, please set 'dns' option to 'dnsmasq.conf'";
-	case 'warningMissingRecommendedPackages': return "Some recommended packages are missing";
+	case 'warningMissingRecommendedPackages': return sprintf("Recommended packages are missing: %s", a);
 	case 'warningInvalidCompressedCacheDir': return sprintf("Invalid compressed cache directory '%s'", a);
 	case 'warningFreeRamCheckFail': return "Can't detect free RAM";
 	case 'warningParallelDownloadsThrottled': return sprintf("Parallel downloads reduced to %s due to low free memory", a);
@@ -1209,12 +1209,14 @@ env.load = function(param, validation_result) {
 		let missing = [];
 		for (let key in bins) {
 			if (!is_present(bins[key][0])) {
-				push(status_data.warnings, { code: 'warningMissingRecommendedPackages', info: bins[key][1] });
 				push(missing, bins[key][1]);
 			}
 		}
+		if (length(missing))
+			push(status_data.warnings, { code: 'warningMissingRecommendedPackages', info: join(', ', missing) });
+
 		if (length(missing) && param != 'quiet') {
-			output.warning(get_text('warningMissingRecommendedPackages') + ', install them by running:');
+			output.warning(get_text('warningMissingRecommendedPackages', join(', ', missing)) + '; install them by running:');
 			if (is_present('apk'))
 				output.print('apk update; apk add ' + join(' ', missing) + ';');
 			else
