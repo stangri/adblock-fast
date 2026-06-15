@@ -927,7 +927,7 @@ const config_schema = { // ucode-lsp disable
 	force_dns_port:          ['list', '53 853'],
 	smartdns_instance:       ['list', '*'],
 	// Domain (sanitized, '-' means disabled)
-	heartbeat_domain:        ['domain', 'heartbeat.melmac.ca'],
+	heartbeat_domain:        ['domain', 'heartbeat.mossdef.org'],
 	// Directory (validated via realpath)
 	compressed_cache_dir:    ['dir', '/etc'],
 };

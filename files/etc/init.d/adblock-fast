@@ -124,7 +124,7 @@ load_validate_config() {
 		'dns:or("dnsmasq.addnhosts", "dnsmasq.conf", "dnsmasq.ipset", "dnsmasq.nftset", "dnsmasq.servers", "smartdns.domainset", "smartdns.ipset", "smartdns.nftset", "unbound.adb_list"):dnsmasq.servers' \
 		'dnsmasq_instance:list(or("*", "-", uinteger, uci("dhcp", "@dnsmasq"))):*' \
 		'smartdns_instance:list(or("*", "-", uinteger, uci("smartdns", "@smartdns"))):*' \
-		'heartbeat_domain:or("-", string):heartbeat.melmac.ca' \
+		'heartbeat_domain:or("-", string):heartbeat.mossdef.org' \
 		'heartbeat_sleep_timeout:range(1,60):10' \
 		'dnsmasq_sanity_check:bool:1' \
 		'dnsmasq_validity_check:bool:0' \
