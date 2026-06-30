@@ -1239,8 +1239,8 @@ env.load = function(param, validation_result) {
 	};
 
 	let _check_kernel_gateway = function() {
-		return system("ip -4 route show default 2>/dev/null | grep -q '^default'") == 0 ||
-			system("ip -6 route show default 2>/dev/null | grep -q '^default'") == 0;
+		return system("ip -4 route show default 2>/dev/null | grep -q .") == 0 ||
+			system("ip -6 route show default 2>/dev/null | grep -q .") == 0;
 	};
 
 	let _check_wan_gateway = function() {

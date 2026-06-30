@@ -7,6 +7,7 @@
 			"dns": "dnsmasq.servers",
 			"verbosity": "0",
 			"force_dns": "0",
+			"gateway_check": "none",
 			"compressed_cache": "0",
 			"config_update_enabled": "0",
 			"ipv6_enabled": "0",
