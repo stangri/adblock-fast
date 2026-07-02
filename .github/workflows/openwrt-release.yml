@@ -202,3 +202,24 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 🧹 Prune stale release assets
+        # Delete assets on the tag that THIS build did not produce, so an arch or
+        # release line you stopped building no longer lingers on the release (and
+        # no longer gets re-published by sync_repo.sh, which pulls from releases).
+        # Gated on a fully green build + a non-empty keep set so a transient arch
+        # failure or an empty build can never wipe a still-good binary.
+        if: needs.build.result == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ steps.version.outputs.version }}
+        run: |
+          keep=$(find release-assets -type f \( -name '*.ipk' -o -name '*.apk' \) \
+            -exec basename {} \; | sort -u)
+          [ -n "$keep" ] || { echo "no packages built — skipping prune"; exit 0; }
+          gh release view "$TAG" --json assets --jq '.assets[].name' | while read -r a; do
+            case "$a" in *.ipk|*.apk) ;; *) continue ;; esac
+            printf '%s\n' "$keep" | grep -qxF -- "$a" || {
+              echo "pruning stale asset: $a"
+              gh release delete-asset "$TAG" "$a" --yes
+            }
+          done
