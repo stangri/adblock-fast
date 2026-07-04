@@ -148,12 +148,14 @@ jobs:
           PKG_VERSION=$(grep -E '^PKG_VERSION *:?=' Makefile | head -n1 | cut -d= -f2 | tr -d '[:space:]')
           PKG_RELEASE=$(grep -E '^PKG_RELEASE *:?=' Makefile | head -n1 | cut -d= -f2 | tr -d '[:space:]')
           for ext in ipk apk; do
+            # apk keeps OpenWrt's 'r' release prefix (…-r5.apk); opkg does not
+            case "$ext" in apk) REL="r${PKG_RELEASE}" ;; *) REL="${PKG_RELEASE}" ;; esac
             for f in $(find bin/packages -type f -path "*/melmac/*.${ext}"); do
               dir=$(dirname "$f")
               if [ -n "${{ matrix.suffix }}" ]; then
-                mv -v "$f" "$dir/${PKG_NAME}-${PKG_VERSION}-${PKG_RELEASE}_${{ matrix.version }}_${{ matrix.suffix }}.${ext}"
+                mv -v "$f" "$dir/${PKG_NAME}-${PKG_VERSION}-${REL}_${{ matrix.version }}_${{ matrix.suffix }}.${ext}"
               else
-                mv -v "$f" "$dir/${PKG_NAME}-${PKG_VERSION}-${PKG_RELEASE}_${{ matrix.version }}_${{ matrix.target }}.${ext}"
+                mv -v "$f" "$dir/${PKG_NAME}-${PKG_VERSION}-${REL}_${{ matrix.version }}_${{ matrix.target }}.${ext}"
               fi
             done
           done
