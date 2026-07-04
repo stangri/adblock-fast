@@ -225,3 +225,13 @@ jobs:
               gh release delete-asset "$TAG" "$a" --yes
             }
           done
+      - name: 🔔 Notify repo.mossdef.org
+        # Event-driven sync: ping the repo so it publishes this release immediately
+        # instead of waiting for its hourly poll. Non-fatal if the token is absent.
+        if: needs.build.result == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_DISPATCH_TOKEN }}
+        run: |
+          gh api -X POST /repos/mossdef-org/repo.mossdef.org/dispatches \
+            -f event_type=package-released \
+            || echo "dispatch failed — repo.mossdef.org still syncs on its hourly schedule"
