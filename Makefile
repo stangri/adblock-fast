@@ -20,6 +20,7 @@ define Package/adblock-fast
   PKGARCH:=all
   DEPENDS:= \
 	+curl \
+	+ip \
 	+resolveip \
 	+ucode \
 	+ucode-mod-fs \

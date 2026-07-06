@@ -21,6 +21,11 @@ config adblock-fast 'config'
 #	option download_max_time ''
 	option download_allow_insecure '1'
 	option force_dns '1'
+# gateway_check: how to wait for a default route at startup
+#	netifd (default) wait for a netifd WAN-style default route
+#	kernel           wait for any kernel IPv4/IPv6 default route
+#	none             do not wait for a default route
+	option gateway_check 'netifd'
 	list force_dns_port '53'
 	list force_dns_port '853'
 # ports listed below are used by some
