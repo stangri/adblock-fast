@@ -1,0 +1,35 @@
+Test that kernel gateway check uses a single system() invocation.
+
+-- Testcase --
+import adb from 'adblock-fast';
+let ti = adb._test_internals;
+
+adb.env.load_config();
+ti.set_cfg('gateway_check', 'kernel');
+adb.env.load_config = function() {};
+
+let orig_system = global.system;
+let orig_warn = global.warn;
+let kernel_calls = 0;
+global.system = function(argv, timeout) {
+	let cmd = '' + argv;
+	if (match(cmd, /^\(ip -4 route show default 2>\/dev\/null \|\| ip -6 route show default 2>\/dev\/null\) \| grep -q \.$/)) {
+		kernel_calls++;
+		return 0;
+	}
+	return orig_system(argv, timeout);
+};
+global.warn = function() {};
+
+let ok = adb.env.load('restart', '0');
+global.system = orig_system;
+global.warn = orig_warn;
+
+printf('env_load_ok: %s\n', ok ? 'YES' : 'NO');
+printf('kernel_gateway_system_calls: %d\n', kernel_calls);
+-- End --
+
+-- Expect stdout --
+env_load_ok: YES
+kernel_gateway_system_calls: 1
+-- End --
