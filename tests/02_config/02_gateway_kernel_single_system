@@ -9,6 +9,7 @@ ti.set_cfg('gateway_check', 'kernel');
 adb.env.load_config = function() {};
 
 let orig_system = global.system;
+let orig_warn = global.warn;
 let kernel_calls = 0;
 global.system = function(argv, timeout) {
 	let cmd = '' + argv;
@@ -18,9 +19,11 @@ global.system = function(argv, timeout) {
 	}
 	return orig_system(argv, timeout);
 };
+global.warn = function() {};
 
 let ok = adb.env.load('restart', '0');
 global.system = orig_system;
+global.warn = orig_warn;
 
 printf('env_load_ok: %s\n', ok ? 'YES' : 'NO');
 printf('kernel_gateway_system_calls: %d\n', kernel_calls);
