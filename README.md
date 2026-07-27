@@ -5,7 +5,7 @@
 [![Lightweight](https://img.shields.io/badge/Size-Lightweight-brightgreen)](https://openwrt.org/packages/pkgdata/adblock-fast)
 [![License](https://img.shields.io/badge/License-AGPL--3.0--or--later-lightgrey)](https://github.com/stangri/adblock-fast/blob/master/LICENSE)
 
-A fast, lightweight DNS-based ad-blocker for OpenWrt that works with dnsmasq, smartdns, or unbound.  
+A fast, lightweight DNS-based ad-blocker for OpenWrt that works with dnsmasq, smartdns, unbound, or BIND.  
 It runs once to process and install blocklists, then exits — keeping memory usage low.
 
 ## Features

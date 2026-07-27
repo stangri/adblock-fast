@@ -1,0 +1,60 @@
+Test that bind.rpz mode emits a valid RPZ zone: SOA/NS header plus apex + wildcard CNAME records per blocked domain.
+
+-- Testcase --
+import adb from 'adblock-fast';
+import { readfile } from 'fs';
+let ti = adb._test_internals;
+
+adb.env.load_config();
+ti.set_cfg('dns', 'bind.rpz');
+ti.set_cfg('dnsmasq_sanity_check', false);
+ti.set_cfg('dnsmasq_validity_check', false);
+ti.set_cfg('heartbeat_domain', null);
+ti.set_cfg('config_update_enabled', false);
+ti.set_cfg('update_config_sizes', false);
+ti.env.dns_set_output_values('bind.rpz');
+ti.append_urls();
+
+let ok = ti.download_lists();
+if (!ok) {
+	print('download_lists failed\n');
+} else {
+	let content = readfile(ti.dns_output.file) || '';
+	let lines = filter(split(content, '\n'), l => length(l) > 0);
+
+	let results = [];
+
+	// Zone header: first line is $TTL, followed by an SOA with a numeric serial
+	// and an NS record. The serial is time()-derived, so match structurally
+	// rather than printing it.
+	push(results, sprintf('first_line: %s', lines[0]));
+	let soa_ok = match(content, /@ IN SOA localhost\. root\.localhost\. \( [0-9]+ /);
+	push(results, sprintf('soa_serial: %s', soa_ok ? 'YES' : 'NO'));
+	push(results, sprintf('ns_record: %s', index(content, 'IN NS localhost.') >= 0 ? 'YES' : 'NO'));
+
+	// Apex records: "domain CNAME ." (one per blocked domain).
+	let apex = filter(lines, l => match(l, /^[^*$@ ].* CNAME \.$/));
+	push(results, sprintf('apex_entries: %d', length(apex)));
+
+	// Wildcard records: "*.domain CNAME ." (one per blocked domain, for subdomains).
+	let wild = filter(lines, l => match(l, /^\*\..* CNAME \.$/));
+	push(results, sprintf('wildcard_entries: %d', length(wild)));
+
+	// Spot-check both records for a known domain.
+	let d = 'ad.doubleclick.test.example.com';
+	let has_apex = index(content, '\n' + d + ' CNAME .\n') >= 0;
+	let has_wild = index(content, '\n*.' + d + ' CNAME .\n') >= 0;
+	push(results, sprintf('correct_format: %s', (has_apex && has_wild) ? 'YES' : 'NO'));
+
+	print(join('\n', results) + '\n');
+}
+-- End --
+
+-- Expect stdout --
+first_line: $TTL 2h
+soa_serial: YES
+ns_record: YES
+apex_entries: 162
+wildcard_entries: 162
+correct_format: YES
+-- End --

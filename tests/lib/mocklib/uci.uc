@@ -203,6 +203,11 @@ return {
 			this._dirty[config] = true;
 		},
 
+		// Alias for the real cursor's list_append (used by uci_list_add_if_new).
+		list_append: function(config, section, option, value) {
+			return this.list_add(config, section, option, value);
+		},
+
 		list_remove: function(config, section, option, value) {
 			let sobj = this._get_section(config, section);
 			if (!sobj || type(sobj[option]) != 'array') return;

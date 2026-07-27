@@ -15,7 +15,7 @@ import * as uloop from 'uloop';
 const pkg = {
 	name: 'adblock-fast',
 	version: 'dev-test',
-	compat: '17',
+	compat: '18',
 	memory_threshold: 33554432,
 	// Per parallel-download task slot: ucode task child (~1 MB) + the
 	// downloader's RSS. Measured: curl ~2.8 MB, uclient-fetch ~2.5 MB,
@@ -108,6 +108,23 @@ const dns_modes = {
 		format_filter: 's|^|local-zone: "|;s|$|." always_nxdomain|',
 		parse_filter: 's|^local-zone: "||;s|." always_nxdomain$||;',
 	},
+	'bind.rpz': {
+		file: '/var/run/' + pkg.name + '/rpz.' + pkg.name + '.zone',
+		cache: '/var/run/' + pkg.name + '/bind.rpz.cache',
+		gzip: pkg.name + '.bind.rpz.gz',
+		config: '/var/run/' + pkg.name + '/bind.rpz.conf',
+		// Each blocked domain becomes an apex + wildcard RPZ record so both the
+		// name itself and all its subdomains resolve to NXDOMAIN ("CNAME .").
+		// The SOA/NS zone header (with a per-run serial) is prepended after
+		// formatting — see download_lists().
+		format_filter: 's|^\\(.*\\)$|\\1 CNAME .\\n*.\\1 CNAME .|',
+		// Reverse for show/parse: drop the zone header and wildcard duplicates,
+		// strip the record suffix, leaving one bare domain per blocked entry.
+		parse_filter: '/^[$@]/d;/^[[:space:]]*IN /d;/^\\*\\./d;s| CNAME .$||;',
+		// Count only the apex records (one per domain) so the blocked count is
+		// not doubled by wildcards nor inflated by the header lines.
+		blocked_count_filter: '/^\\*\\./d;/ CNAME \\.$/!d',
+	},
 };
 
 const tmp = {
@@ -174,6 +191,7 @@ let env = {
 	dnsmasq_features: '',
 	smartdns_installed: false,
 	unbound_installed: false,
+	bind_installed: false,
 	ipset_supported: false,
 	nft_installed: false,
 	awk_cmd: 'awk',
@@ -313,6 +331,9 @@ env.detect = function() {
 	env.dnsmasq_installed = is_present('dnsmasq');
 	env.smartdns_installed = is_present('smartdns');
 	env.unbound_installed = is_present('unbound');
+	// BIND ships its daemon as `named`; the RPZ zone tools share that prefix
+	// (named-checkzone / named-checkconf) and the OpenWrt init script is `named`.
+	env.bind_installed = is_present('named');
 	env.nft_installed = is_present('nft');
 	env.ipset_supported = is_present('ipset') && cmd_rc('/usr/sbin/ipset help hash:net') == 0;
 	if (is_present('gawk')) env.awk_cmd = 'gawk';
@@ -431,6 +452,16 @@ function gzip_decompress(input, output) {
 function grep_test(pattern, file, flags) {
 	return cmd_rc(sprintf('grep %s %s %s',
 		flags || '-q', shell_quote(pattern), shell_quote(file))) == 0;
+}
+
+// The TLD sanity checks flag block-list lines that have no dot (a bare TLD
+// would blackhole an entire suffix). Some resolver headers legitimately have
+// no dot — unbound's `server:` and BIND's `$TTL` line — and must be excluded.
+// Returned as an ERE alternation for use with grep -vE.
+function tld_ok_pattern() {
+	return cfg.dns == 'bind.rpz'
+		? '\\.|server:|^[$@]|^[[:space:]]*IN '
+		: '\\.|server:';
 }
 
 function grep_count(pattern, file, flags) {
@@ -572,6 +603,7 @@ let output = {
 		if (index(d, 'dnsmasq.') == 0) _write(2, '[DNSM] ' + msg);
 		else if (index(d, 'smartdns.') == 0) _write(2, '[SMRT] ' + msg);
 		else if (index(d, 'unbound.') == 0) _write(2, '[UNBD] ' + msg);
+		else if (index(d, 'bind.') == 0) _write(2, '[BIND] ' + msg);
 	},
 	error:   function(msg) { _write(null, sym.ERR + ' ' + msg + '!\\n'); },
 	warning: function(msg) { _write(null, sym.WARN + ' ' + msg + '!\\n'); },
@@ -712,6 +744,7 @@ function get_text(r, ...args) {
 	case 'statusTriggerBootWait': return "waiting for trigger (on_boot)";
 	case 'statusTriggerStartWait': return "waiting for trigger (on_start)";
 	case 'warningExternalDnsmasqConfig': return "Use of external dnsmasq config file detected, please set 'dns' option to 'dnsmasq.conf'";
+	case 'warningBindManualConfig': return sprintf("BIND RPZ zone written; ensure named.conf includes '%s' and adds 'response-policy { zone \"rpz.%s\"; };' to its options{} (one-time setup)", a, pkg.name);
 	case 'warningMissingRecommendedPackages': return sprintf("Recommended packages are missing: %s", a);
 	case 'warningInvalidCompressedCacheDir': return sprintf("Invalid compressed cache directory '%s'", a);
 	case 'warningFreeRamCheckFail': return "Can't detect free RAM";
@@ -729,6 +762,7 @@ function get_text(r, ...args) {
 env.check_dnsmasq = function() { env.detect(); return env.dnsmasq_installed; };
 env.check_smartdns = function() { env.detect(); return env.smartdns_installed; };
 env.check_unbound = function() { env.detect(); return env.unbound_installed; };
+env.check_bind = function() { env.detect(); return env.bind_installed; };
 env.check_ipset = function() { env.detect(); return env.ipset_supported; };
 env.check_nft = function() { env.detect(); return env.nft_installed; };
 
@@ -1093,9 +1127,12 @@ env.load = function(param, validation_result) {
 
 	let _check_resolver_environment = function() {
 		// Check resolver presence
-		let dns_family = split(cfg.dns, '.')[0];
-		switch (dns_family) {
-		case 'dnsmasq':
+		switch (cfg.dns) {
+		case 'dnsmasq.addnhosts':
+		case 'dnsmasq.conf':
+		case 'dnsmasq.ipset':
+		case 'dnsmasq.nftset':
+		case 'dnsmasq.servers':
 			if (!env.check_dnsmasq()) {
 				if (param != 'quiet') {
 					push(status_data.errors, { code: 'errorDNSReload', info: '' });
@@ -1105,7 +1142,9 @@ env.load = function(param, validation_result) {
 			}
 			if (env.check_dnsmasq_feature('idn')) cfg.allow_non_ascii = false;
 			break;
-		case 'smartdns':
+		case 'smartdns.domainset':
+		case 'smartdns.ipset':
+		case 'smartdns.nftset':
 			if (!env.check_smartdns()) {
 				if (param != 'quiet') {
 					push(status_data.errors, { code: 'errorDNSReload', info: '' });
@@ -1115,7 +1154,7 @@ env.load = function(param, validation_result) {
 			}
 			cfg.allow_non_ascii = false;
 			break;
-		case 'unbound':
+		case 'unbound.adb_list':
 			if (!env.check_unbound()) {
 				if (param != 'quiet') {
 					push(status_data.errors, { code: 'errorDNSReload', info: '' });
@@ -1124,6 +1163,18 @@ env.load = function(param, validation_result) {
 				return false;
 			}
 			cfg.allow_non_ascii = true;
+			break;
+		case 'bind.rpz':
+			if (!env.check_bind()) {
+				if (param != 'quiet') {
+					push(status_data.errors, { code: 'errorDNSReload', info: '' });
+					output.error("Resolver 'bind' (named) not found");
+				}
+				return false;
+			}
+			// RPZ zone owner names must be plain ASCII/punycode for the zone to
+			// load, so non-ASCII labels are filtered out (unlike unbound).
+			cfg.allow_non_ascii = false;
 			break;
 		}
 
@@ -1470,8 +1521,63 @@ function _get_smartdns_instances() {
 	return result;
 }
 
+// True when the configured output is one of the dnsmasq modes (the only ones
+// subject to the dnsmasq-specific validity check and file ownership).
+function is_dnsmasq_mode() {
+	switch (cfg.dns) {
+	case 'dnsmasq.addnhosts':
+	case 'dnsmasq.conf':
+	case 'dnsmasq.ipset':
+	case 'dnsmasq.nftset':
+	case 'dnsmasq.servers':
+		return true;
+	}
+	return false;
+}
+
+// The init-script / daemon name for the configured resolver. Usually the
+// cfg.dns prefix, except BIND whose daemon and OpenWrt init script are both
+// `named` (the `bind` token matches the RPZ terminology users search for).
+function resolver_service_name() {
+	switch (cfg.dns) {
+	case 'dnsmasq.addnhosts':
+	case 'dnsmasq.conf':
+	case 'dnsmasq.ipset':
+	case 'dnsmasq.nftset':
+	case 'dnsmasq.servers':
+		return 'dnsmasq';
+	case 'smartdns.domainset':
+	case 'smartdns.ipset':
+	case 'smartdns.nftset':
+		return 'smartdns';
+	case 'unbound.adb_list':
+		return 'unbound';
+	case 'bind.rpz':
+		return 'named';
+	}
+	return split(cfg.dns, '.')[0];
+}
+
+// True when named.conf already wires up our RPZ zone (so the one-time setup
+// note can be suppressed). `named-checkconf -p` expands every include file and
+// prints the effective config, so a zone/response-policy pulled in from an
+// included snippet is still seen; if it is unavailable or the config does not
+// parse, fall back to a literal grep of the main named.conf.
+function _bind_rpz_configured() {
+	let zone = 'rpz.' + pkg.name;
+	if (is_present('named-checkconf')) {
+		let dump = cmd_output('named-checkconf -p 2>/dev/null');
+		if (dump)
+			return index(dump, 'zone "' + zone + '"') >= 0 &&
+			       index(dump, 'response-policy') >= 0;
+	}
+	let content = readfile('/etc/bind/named.conf') || '';
+	return index(content, dns_output.config) >= 0 &&
+	       index(content, 'response-policy') >= 0;
+}
+
 function resolver(action) {
-	let resolver_name = split(cfg.dns, '.')[0];
+	let resolver_name = resolver_service_name();
 	if (!action) return true;
 
 	switch (action) {
@@ -1529,14 +1635,38 @@ function resolver(action) {
 			}
 			output.fail();
 			return false;
+		case 'bind.rpz':
+			output.dns('Testing ' + cfg.dns + ' configuration ');
+			if (cmd_rc(sprintf('named-checkzone -q %s %s',
+				shell_quote('rpz.' + pkg.name), shell_quote(dns_output.file))) == 0) {
+				output.ok();
+				return true;
+			}
+			output.fail();
+			return false;
 		default:
 			return true;
 		}
 
 	case 'restart':
-		output.dns('Restarting ' + resolver_name + ' ');
-		status_data.message = 'Restarting ' + resolver_name;
-		if (service_restart(resolver_name)) {
+		let restarted;
+		if (cfg.dns == 'bind.rpz' && is_present('rndc')) {
+			// BIND: reload just the RPZ zone via rndc — no full daemon bounce and no
+			// resolver cache flush. `rndc reload <zone>` also loads a zone that failed
+			// at named startup because its file was still missing (e.g. the tmpfs zone
+			// file not yet regenerated after a reboot), which is precisely our case.
+			status_data.message = 'Reloading RPZ zone';
+			output.dns(status_data.message + ' ');
+			restarted = cmd_rc(sprintf('rndc reload %s', shell_quote('rpz.' + pkg.name))) == 0;
+			// Fall back to a full restart if the reload failed (rndc not configured,
+			// or the zone stanza is not in named.conf yet).
+			if (!restarted) restarted = service_restart(resolver_name);
+		} else {
+			status_data.message = 'Restarting ' + resolver_name;
+			output.dns(status_data.message + ' ');
+			restarted = service_restart(resolver_name);
+		}
+		if (restarted) {
 			status_data.status = 'statusSuccess';
 			led_on(cfg.led);
 			output.ok();
@@ -1550,7 +1680,7 @@ function resolver(action) {
 	case 'sanity':
 		if (!cfg.dnsmasq_sanity_check) return true;
 		output.dns('Sanity check for ' + cfg.dns + ' TLDs ');
-		if (!grep_test('\\.|server:', dns_output.file, '-qvE')) {
+		if (!grep_test(tld_ok_pattern(), dns_output.file, '-qvE')) {
 			output.ok();
 		} else {
 			push(status_data.warnings, { code: 'warningSanityCheckTLD', info: dns_output.file });
@@ -1558,10 +1688,19 @@ function resolver(action) {
 		}
 		output.dns('Sanity check for ' + cfg.dns + ' leading dots ');
 		let dot_pattern;
-		switch (split(cfg.dns, '.')[0]) {
-		case 'dnsmasq': dot_pattern = '/\\.'; break;
-		case 'smartdns': dot_pattern = '^\\.'; break;
-		case 'unbound': dot_pattern = '"\\.'; break;
+		switch (cfg.dns) {
+		case 'dnsmasq.addnhosts':
+		case 'dnsmasq.conf':
+		case 'dnsmasq.ipset':
+		case 'dnsmasq.nftset':
+		case 'dnsmasq.servers': dot_pattern = '/\\.'; break;
+		case 'smartdns.domainset':
+		case 'smartdns.ipset':
+		case 'smartdns.nftset': dot_pattern = '^\\.'; break;
+		case 'unbound.adb_list': dot_pattern = '"\\.'; break;
+		// RPZ owner names are bare; a legit wildcard starts with '*.', so only a
+		// literal leading dot signals a malformed entry.
+		case 'bind.rpz': dot_pattern = '^\\.'; break;
 		}
 		if (dot_pattern && !grep_test(dot_pattern, dns_output.file)) {
 			output.ok();
@@ -1608,8 +1747,12 @@ function resolver(action) {
 
 	case 'update_config':
 		output.dns('Updating ' + resolver_name + ' configuration ');
-		switch (split(cfg.dns, '.')[0]) {
-		case 'dnsmasq':
+		switch (cfg.dns) {
+		case 'dnsmasq.addnhosts':
+		case 'dnsmasq.conf':
+		case 'dnsmasq.ipset':
+		case 'dnsmasq.nftset':
+		case 'dnsmasq.servers':
 			for (let name in _get_dnsmasq_instances()) {
 				_dnsmasq_instance_config(name, cfg.dns);
 				_dnsmasq_instance_append_force_dns_port(name);
@@ -1624,7 +1767,9 @@ function resolver(action) {
 				return false;
 			}
 			break;
-		case 'smartdns':
+		case 'smartdns.domainset':
+		case 'smartdns.ipset':
+		case 'smartdns.nftset':
 			for (let name in _get_smartdns_instances()) {
 				_smartdns_instance_config(name, cfg.dns);
 				_smartdns_instance_append_force_dns_port(name);
@@ -1635,12 +1780,35 @@ function resolver(action) {
 			chown(dns_output.file, 'root', 'root');
 			chown(dns_output.config, 'root', 'root');
 			break;
-		case 'unbound':
+		case 'unbound.adb_list':
 			let ubnd_cur = cursor();
 			ubnd_cur.load('unbound');
 			ubnd_cur.foreach('unbound', 'unbound', (s) => _unbound_instance_append_force_dns_port(s['.name']));
 			chmod(dns_output.file, 0660);
 			chown(dns_output.file, 'root', 'unbound');
+			break;
+		case 'bind.rpz':
+			// BIND on OpenWrt has no UCI config model, so we cannot splice the
+			// required stanzas into named.conf the way the dnsmasq/smartdns/unbound
+			// instances are wired. Instead emit a ready-to-include zone snippet and
+			// leave a one-time setup note (the response-policy line must live inside
+			// named.conf's options{}, which cannot be supplied from an include).
+			writefile(dns_output.config,
+				'zone "rpz.' + pkg.name + '" {\n' +
+				'\ttype master;\n' +
+				'\tfile "' + dns_output.file + '";\n' +
+				'\tallow-query { none; };\n' +
+				'\tcheck-names ignore;\n' +
+				'};\n');
+			chmod(dns_output.file, 0644);
+			chmod(dns_output.config, 0644);
+			chown(dns_output.file, 'root', 'root');
+			chown(dns_output.config, 'root', 'root');
+			// Only nag about the one-time named.conf wiring when it isn't already
+			// in place — otherwise a correctly-configured BIND would warn on every
+			// single update.
+			if (!_bind_rpz_configured())
+				push(status_data.warnings, { code: 'warningBindManualConfig', info: dns_output.config });
 			break;
 		}
 		output.ok();
@@ -1989,10 +2157,22 @@ function download_lists() {
 	elapsed = end_time - start_time;
 	logger_debug('[PERF-DEBUG] ' + step_title + ' took ' + elapsed + 's');
 
-	// Optimization (subdomain dedup)
-	let needs_optimization = (cfg.dns == 'dnsmasq.conf' || cfg.dns == 'dnsmasq.ipset' || cfg.dns == 'dnsmasq.nftset' ||
-		cfg.dns == 'dnsmasq.servers' || cfg.dns == 'smartdns.domainset' || cfg.dns == 'smartdns.ipset' ||
-		cfg.dns == 'smartdns.nftset' || cfg.dns == 'unbound.adb_list');
+	// Optimization (subdomain dedup) — every mode except dnsmasq.addnhosts, whose
+	// hosts-file format cannot express a wildcard so subdomains must be listed.
+	let needs_optimization = false;
+	switch (cfg.dns) {
+	case 'dnsmasq.conf':
+	case 'dnsmasq.ipset':
+	case 'dnsmasq.nftset':
+	case 'dnsmasq.servers':
+	case 'smartdns.domainset':
+	case 'smartdns.ipset':
+	case 'smartdns.nftset':
+	case 'unbound.adb_list':
+	case 'bind.rpz':
+		needs_optimization = true;
+		break;
+	}
 
 	if (needs_optimization) {
 		start_time = time();
@@ -2120,11 +2300,29 @@ function download_lists() {
 		output.fail();
 		push(status_data.errors, { code: 'errorMovingDataFile', info: dns_output.file });
 	}
-	if (cfg.dns == 'unbound.adb_list')
+	// Prepend the resolver's file header, if any.
+	switch (cfg.dns) {
+	case 'unbound.adb_list':
 		sed_inplace('1 i\\server:', dns_output.file);
+		break;
+	case 'bind.rpz':
+		// Prepend the RPZ zone header. The SOA serial must advance on every write
+		// or BIND refuses to reload the zone — time() (epoch seconds) is naturally
+		// monotonic. Streamed via a temp file so a multi-million-line zone is never
+		// pulled into memory.
+		let serial = sprintf('%d', time());
+		let header = '$TTL 2h\n' +
+			'@ IN SOA localhost. root.localhost. ( ' + serial + ' 6h 1h 1w 2h )\n' +
+			'  IN NS localhost.\n';
+		writefile(tmp.a, header);
+		system(sprintf('cat %s %s > %s && mv %s %s',
+			shell_quote(tmp.a), shell_quote(dns_output.file),
+			shell_quote(tmp.b), shell_quote(tmp.b), shell_quote(dns_output.file)));
+		break;
+	}
 
 	// Validity check
-	if (cfg.dnsmasq_validity_check && index(cfg.dns, 'dnsmasq.') == 0) {
+	if (cfg.dnsmasq_validity_check && is_dnsmasq_mode()) {
 		start_time = time();
 		step_title = 'Validating domain entries';
 		output.verbose('[PROC] ' + step_title + ' ');
@@ -2265,6 +2463,7 @@ function _build_procd_data() {
 		smartdns_ipset_support: env.smartdns_installed && env.ipset_supported,
 		smartdns_nftset_support: env.smartdns_installed && env.nft_installed,
 		unbound_installed: env.unbound_installed,
+		bind_installed: env.bind_installed,
 		leds: lsdir('/sys/class/leds') || [],
 	};
 
@@ -2386,6 +2585,7 @@ function emit_procd_shell(data) {
 	push(lines, 'json_add_boolean smartdns_ipset_support ' + shell_quote(plat.smartdns_ipset_support ? '1' : '0'));
 	push(lines, 'json_add_boolean smartdns_nftset_support ' + shell_quote(plat.smartdns_nftset_support ? '1' : '0'));
 	push(lines, 'json_add_boolean unbound_installed ' + shell_quote(plat.unbound_installed ? '1' : '0'));
+	push(lines, 'json_add_boolean bind_installed ' + shell_quote(plat.bind_installed ? '1' : '0'));
 	push(lines, 'json_add_array leds');
 	for (let led in (plat.leds || []))
 		push(lines, 'json_add_string \'\' ' + shell_quote('' + led));
@@ -2690,7 +2890,7 @@ function allow(string) {
 		return;
 	}
 
-	let resolver_name = split(cfg.dns, '.')[0];
+	let resolver_name = resolver_service_name();
 	output.info('Allowing domains and restarting ' + resolver_name + ' ');
 	output.verbose('[PROC] Allowing domains \\n');
 
@@ -2698,13 +2898,36 @@ function allow(string) {
 		if (!c) continue;
 		output.verbose('  ' + c + ' ');
 		let escaped = replace(c, /\./g, '\\.');
-		switch (split(cfg.dns, '.')[0]) {
-		case 'dnsmasq':
-			sed_inplace(sprintf('\\:/\\(/%s\\|.%s\\):d', escaped, escaped), dns_output.file);
+		// Allowing a domain removes the block for that exact name AND every
+		// subdomain of it (a left boundary of start-of-field or a literal '.'),
+		// while leaving unrelated names that merely share the suffix as a
+		// substring (myDOMAIN, DOMAIN.evil.com) untouched. Each mode's on-disk
+		// format needs its own boundary anchors.
+		switch (cfg.dns) {
+		case 'dnsmasq.addnhosts':
+		case 'dnsmasq.conf':
+		case 'dnsmasq.ipset':
+		case 'dnsmasq.nftset':
+		case 'dnsmasq.servers':
+			// Domain sits between '/' (or a space, for addnhosts) and '/' (or
+			// end-of-line): server=/d/, local=/d/, ipset=/d/adb, '127.0.0.1 d'.
+			sed_inplace(sprintf('\\:[/. ]%s\\(/\\|$\\):d', escaped), dns_output.file);
 			break;
-		case 'smartdns':
-		case 'unbound':
-			sed_inplace(sprintf('\\:\\("%s\\|.%s"\\):d', escaped, escaped), dns_output.file);
+		case 'smartdns.domainset':
+		case 'smartdns.ipset':
+		case 'smartdns.nftset':
+			// Bare domain, one per line.
+			sed_inplace(sprintf('/\\(^\\|\\.\\)%s$/d', escaped), dns_output.file);
+			break;
+		case 'unbound.adb_list':
+			// local-zone: "d." always_nxdomain — domain between '"' and the
+			// trailing '."'.
+			sed_inplace(sprintf('\\:[."]%s\\.":d', escaped), dns_output.file);
+			break;
+		case 'bind.rpz':
+			// Drop the apex/wildcard RPZ records for the domain and any subdomain
+			// of it: '[*.]d CNAME .', '[*.]sub.d CNAME .'.
+			sed_inplace(sprintf('/^\\(.*\\.\\)\\{0,1\\}%s CNAME \\.$/d', escaped), dns_output.file);
 			break;
 		}
 		output.ok();
@@ -2727,14 +2950,16 @@ function allow(string) {
 		adb_config_cache('create');
 		status_data.stats = pkg.service_name + ' is blocking ' + count_blocked_domains() + ' domains (with ' + cfg.dns + ')';
 		output.ok();
-		if (cfg.dns == 'dnsmasq.ipset') {
+		switch (cfg.dns) {
+		case 'dnsmasq.ipset':
 			output.verbose('[PROC] Flushing adb ipset ');
 			if (system('ipset -q -! flush adb 2>/dev/null') == 0) output.ok(); else output.fail();
-		}
-		if (cfg.dns == 'dnsmasq.nftset') {
+			break;
+		case 'dnsmasq.nftset':
 			output.verbose('[PROC] Flushing adb nft sets ');
 			system('nft flush set inet fw4 adb6 2>/dev/null');
 			if (system('nft flush set inet fw4 adb4 2>/dev/null') == 0) output.ok(); else output.fail();
+			break;
 		}
 		output.dns('Restarting ' + resolver_name + ' ');
 		if (service_restart(resolver_name)) output.ok(); else output.fail();
@@ -2755,17 +2980,26 @@ function check(param) {
 		output.print("Usage: /etc/init.d/" + pkg.name + " check 'domain' ...\\n");
 		return;
 	}
+	// Restrict matching to genuine block entries. Some modes keep non-block
+	// lines in the same file — dnsmasq.servers writes explicit allows as
+	// 'server=/domain/#', and bind.rpz emits a '*.domain' wildcard alongside
+	// each apex record — and neither should be reported as a block. The mode's
+	// blocked_count_filter (a sed expression) already isolates block lines, so
+	// pre-filter the file through it before grepping.
+	let blocks = dns_output.blocked_count_filter
+		? sprintf("sed '%s' %s", dns_output.blocked_count_filter, shell_quote(dns_output.file))
+		: sprintf('cat %s', shell_quote(dns_output.file));
 	for (let string in split('' + param, /\s+/)) {
 		if (!string) continue;
-		let c = grep_count(string, dns_output.file, '-c -E');
+		let c = int(trim(cmd_output(sprintf('%s | grep -c -E %s', blocks, shell_quote(string)))) || '0');
 		if (c > 0) {
 			let word = (c == 1) ? '1 match' : c + ' matches';
 			output.info("Found " + word + " for '" + string + "' in '" + dns_output.file + "'.\\n");
 			output.verbose("[PROC] Found " + word + " for '" + string + "' in '" + dns_output.file + "'.\\n");
 			if (c <= 20) {
-				let matches = grep_output(string, dns_output.file);
+				let matches = cmd_output(sprintf('%s | grep -E %s', blocks, shell_quote(string)));
 				if (dns_output.parse_filter)
-					matches = cmd_output(sprintf("grep %s %s | sed '%s'", shell_quote(string), shell_quote(dns_output.file), dns_output.parse_filter));
+					matches = cmd_output(sprintf("%s | grep -E %s | sed '%s'", blocks, shell_quote(string), dns_output.parse_filter));
 				if (matches) output.print(matches + '\\n');
 			}
 		} else {
@@ -2781,15 +3015,15 @@ function check_tld() {
 		output.print("No block-list ('" + dns_output.file + "') found.\\n");
 		return;
 	}
-	let c = grep_count('\\.|server:', dns_output.file, '-cvE');
+	let c = grep_count(tld_ok_pattern(), dns_output.file, '-cvE');
 	if (c > 0) {
 		let word = (c == 1) ? '1 match for TLD' : c + ' matches for TLDs';
 		output.info("Found " + word + " in '" + dns_output.file + "'.\\n");
 		output.verbose("[PROC] Found " + word + " in '" + dns_output.file + "'.\\n");
 		if (c <= 20) {
-			let matches = grep_output('\\.|server:', dns_output.file, '-vE');
+			let matches = grep_output(tld_ok_pattern(), dns_output.file, '-vE');
 			if (dns_output.parse_filter)
-				matches = cmd_output(sprintf("grep -vE '\\.|server:' %s | sed '%s'", shell_quote(dns_output.file), dns_output.parse_filter));
+				matches = cmd_output(sprintf("grep -vE %s %s | sed '%s'", shell_quote(tld_ok_pattern()), shell_quote(dns_output.file), dns_output.parse_filter));
 			if (matches) output.print(matches + '\\n');
 		}
 	} else {
@@ -2805,10 +3039,17 @@ function check_leading_dot() {
 		return;
 	}
 	let search_string = '';
-	switch (split(cfg.dns, '.')[0]) {
-	case 'dnsmasq': search_string = '/\\.'; break;
-	case 'smartdns': search_string = '^\\.'; break;
-	case 'unbound': search_string = '"\\.'; break;
+	switch (cfg.dns) {
+	case 'dnsmasq.addnhosts':
+	case 'dnsmasq.conf':
+	case 'dnsmasq.ipset':
+	case 'dnsmasq.nftset':
+	case 'dnsmasq.servers': search_string = '/\\.'; break;
+	case 'smartdns.domainset':
+	case 'smartdns.ipset':
+	case 'smartdns.nftset': search_string = '^\\.'; break;
+	case 'unbound.adb_list': search_string = '"\\.'; break;
+	case 'bind.rpz': search_string = '^\\.'; break;
 	default: return;
 	}
 	let c = grep_count(search_string, dns_output.file);
@@ -2993,6 +3234,7 @@ function get_init_status(name) {
 			smartdns_ipset_support: env.smartdns_installed && env.ipset_supported,
 			smartdns_nftset_support: env.smartdns_installed && env.nft_installed,
 			unbound_installed: env.unbound_installed,
+			bind_installed: env.bind_installed,
 			leds: lsdir('/sys/class/leds') || [],
 		},
 
@@ -3024,6 +3266,7 @@ function get_platform_support(name) {
 		smartdns_ipset_support: env.smartdns_installed && env.ipset_supported,
 		smartdns_nftset_support: env.smartdns_installed && env.nft_installed,
 		unbound_installed: env.unbound_installed,
+		bind_installed: env.bind_installed,
 		leds: length(lsdir('/sys/class/leds') || []) > 0,
 	};
 	return result;

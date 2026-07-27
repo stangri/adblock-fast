@@ -1,0 +1,59 @@
+Test that the interactive allow() removes the block for the exact domain and
+all of its subdomains, while leaving unrelated names that merely share the
+suffix as a substring, and adds an explicit allow entry (dnsmasq.servers).
+
+-- Testcase --
+import adb from 'adblock-fast';
+import { readfile, writefile } from 'fs';
+let ti = adb._test_internals;
+
+// Build a servers-mode block-list.
+adb.env.load_config();
+ti.set_cfg('dns', 'dnsmasq.servers');
+ti.set_cfg('dnsmasq_sanity_check', false);
+ti.set_cfg('dnsmasq_validity_check', false);
+ti.set_cfg('heartbeat_domain', null);
+ti.set_cfg('config_update_enabled', false);
+ti.set_cfg('update_config_sizes', false);
+ti.set_cfg('compressed_cache', false);
+ti.env.dns_set_output_values('dnsmasq.servers');
+ti.append_urls();
+ti.download_lists();
+
+// Seed a known set of block entries: the exact domain, two subdomains, and a
+// look-alike that must survive (venmo.com is only a substring of myvenmo.com).
+let seed = readfile(ti.dns_output.file) || '';
+seed += 'server=/venmo.com/\n';
+seed += 'server=/get.venmo.com/\n';
+seed += 'server=/a.b.venmo.com/\n';
+seed += 'server=/myvenmo.com/\n';
+writefile(ti.dns_output.file, seed);
+
+// Run the interactive allow(); stop its internal load_config() from resetting
+// cfg, and keep it quiet. The file mutation (block removal + explicit-allow
+// append) is complete before allow()'s final _update_ubus_status() teardown,
+// which is not exercised here (no ubus service fixture), so swallow any error
+// it raises — the assertions below still cover the full removal/append.
+ti.set_cfg('verbosity', 0);
+adb.env.load_config = function() {};
+try { adb.allow('venmo.com'); } catch (e) {}
+
+let out = readfile(ti.dns_output.file) || '';
+let has = function(line) { return index(out, line + '\n') >= 0; };
+
+let results = [];
+push(results, sprintf('exact block removed: %s', has('server=/venmo.com/') ? 'NO' : 'YES'));
+push(results, sprintf('subdomain get removed: %s', has('server=/get.venmo.com/') ? 'NO' : 'YES'));
+push(results, sprintf('subdomain a.b removed: %s', has('server=/a.b.venmo.com/') ? 'NO' : 'YES'));
+push(results, sprintf('lookalike kept: %s', has('server=/myvenmo.com/') ? 'YES' : 'NO'));
+push(results, sprintf('explicit allow added: %s', has('server=/venmo.com/#') ? 'YES' : 'NO'));
+print(join('\n', results) + '\n');
+-- End --
+
+-- Expect stdout --
+exact block removed: YES
+subdomain get removed: YES
+subdomain a.b removed: YES
+lookalike kept: YES
+explicit allow added: YES
+-- End --

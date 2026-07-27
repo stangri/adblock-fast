@@ -1,0 +1,38 @@
+Test that check() does not report an explicitly-allowed domain as a block.
+In dnsmasq.servers mode an allowed domain is kept in the file as an explicit
+allow entry (server=/domain/#); check() must exclude those and only report
+genuine block entries.
+
+-- Testcase --
+import adb from 'adblock-fast';
+let ti = adb._test_internals;
+
+// Build the blocklist with an allowed domain that also exists in the block
+// data, so the output file ends up with a 'server=/ad.doubleclick.../#' allow
+// entry and no block line for it.
+adb.env.load_config();
+ti.set_cfg('dns', 'dnsmasq.servers');
+ti.set_cfg('dnsmasq_sanity_check', false);
+ti.set_cfg('dnsmasq_validity_check', false);
+ti.set_cfg('heartbeat_domain', null);
+ti.set_cfg('config_update_enabled', false);
+ti.set_cfg('update_config_sizes', false);
+ti.set_cfg('allowed_domain', 'ad.doubleclick.test.example.com');
+ti.env.dns_set_output_values('dnsmasq.servers');
+ti.append_urls();
+ti.download_lists();
+
+// Set verbosity=2 for check() output, then call check() directly
+// (bypassing check()'s internal load_config() which would reset to 0)
+ti.set_cfg('verbosity', 2);
+adb.env.load_config = function() {};
+// First domain is the allowed one (must be reported as NOT blocked), the
+// second is a still-blocked domain (must be reported as a block).
+adb.check('ad.doubleclick.test.example.com tracker.analytics.test.example.com');
+-- End --
+
+-- Expect stderr --
+[PROC] The 'ad.doubleclick.test.example.com' is not found in current block-list ('TESTDIR/var_run/adblock-fast/dnsmasq.servers').
+[PROC] Found 1 match for 'tracker.analytics.test.example.com' in 'TESTDIR/var_run/adblock-fast/dnsmasq.servers'.
+tracker.analytics.test.example.com
+-- End --
