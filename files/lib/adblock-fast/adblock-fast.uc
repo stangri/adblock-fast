@@ -26,7 +26,7 @@ const pkg = {
 	run_file: '/dev/shm/adblock-fast',
 	triggers: {
 		reload: 'parallel_downloads debug download_timeout download_connect_timeout download_max_time download_allow_insecure allowed_domain blocked_domain allowed_url blocked_url dns config_update_enabled config_update_url dnsmasq_config_file_url curl_additional_param curl_max_file_size curl_retry',
-		restart: 'compressed_cache compressed_cache_dir force_dns led force_dns_port',
+		restart: 'compressed_cache compressed_cache_dir dnsmasq_instance force_dns led force_dns_port smartdns_instance',
 	},
 };
 pkg.service_name = pkg.name + ' ' + pkg.version;

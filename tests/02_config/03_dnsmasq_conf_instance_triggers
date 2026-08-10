@@ -1,0 +1,34 @@
+Test that changing dnsmasq_instance or smartdns_instance triggers a service restart.
+
+-- Testcase --
+import adb from 'adblock-fast';
+let ti = adb._test_internals;
+
+// Verify that dnsmasq_instance and smartdns_instance are in restart triggers
+// so that modifying the instance list causes adblock-fast to reconfigure
+// all affected resolver instances (addnmount, serversfile, confdir symlinks).
+let pkg_triggers = ti.pkg_triggers();
+let restart = split(pkg_triggers.restart, ' ');
+
+let results = [];
+for (let opt in ['dnsmasq_instance', 'smartdns_instance']) {
+	let found = index(restart, opt) >= 0;
+	push(results, sprintf('%s in restart triggers: %s', opt, found ? 'YES' : 'NO'));
+}
+
+// Also verify these are NOT in reload triggers (they don't require re-download)
+let reload = split(pkg_triggers.reload, ' ');
+for (let opt in ['dnsmasq_instance', 'smartdns_instance']) {
+	let found = index(reload, opt) >= 0;
+	push(results, sprintf('%s in reload triggers: %s', opt, found ? 'YES' : 'NO'));
+}
+
+print(join('\n', results) + '\n');
+-- End --
+
+-- Expect stdout --
+dnsmasq_instance in restart triggers: YES
+smartdns_instance in restart triggers: YES
+dnsmasq_instance in reload triggers: NO
+smartdns_instance in reload triggers: NO
+-- End --
