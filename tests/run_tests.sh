@@ -125,6 +125,7 @@ sed -i '/^export default {/,/^};/{
 \t\tappend_urls: append_urls,\
 \t\tcount_lines: count_lines,\
 \t\tcount_blocked_domains: count_blocked_domains,\
+\t\tpkg_triggers: function() { return pkg.triggers; },\
 \t},
 }' "$patch_dir/adblock-fast.uc"
 
